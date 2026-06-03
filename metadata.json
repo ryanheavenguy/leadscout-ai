@@ -1,0 +1,8 @@
+{
+  "name": "Church Search",
+  "description": "A sophisticated lead discovery and intelligence platform powered by Gemini. Search for companies, extract key insights using real-time Google Search grounding, and manage your sales pipeline with AI-driven research.",
+  "requestFramePermissions": [
+    "geolocation"
+  ],
+  "majorCapabilities": []
+}
