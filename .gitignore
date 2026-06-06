@@ -8,3 +8,8 @@ node_modules/
 
 # Build output
 dist/
+
+.vercel
+
+# Local database — contains PII (pastor names, phones, emails)
+churches-db.json
