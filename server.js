@@ -1,4 +1,6 @@
-import 'dotenv/config';
+import { config as dotenvConfig } from 'dotenv';
+dotenvConfig({ path: '.env.local' });
+dotenvConfig(); // fallback to .env (won't overwrite already-set vars)
 import express from 'express';
 import rateLimit from 'express-rate-limit';
 import cors from 'cors';
@@ -915,6 +917,15 @@ Return:
   }
 });
 
+
+// ─── Static frontend (production) ────────────────────────────────────────────
+const DIST = path.join(__dirname, 'dist');
+if (fs.existsSync(DIST)) {
+  app.use(express.static(DIST));
+  app.get('*', (req, res) => {
+    res.sendFile(path.join(DIST, 'index.html'));
+  });
+}
 
 // ─── Start ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
