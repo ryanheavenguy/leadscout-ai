@@ -46,7 +46,7 @@ const DatabasePage: React.FC<Props> = ({ onBack }) => {
     return churches.filter(c => {
       const matchStatus = filterStatus === 'all' || c.outreachStatus === filterStatus;
       const q = searchQuery.toLowerCase();
-      const matchSearch = !q || c.name.toLowerCase().includes(q) || (c.city || '').toLowerCase().includes(q) || (c.denomination || '').toLowerCase().includes(q);
+      const matchSearch = !q || c.name.toLowerCase().includes(q) || (c.city || '').toLowerCase().includes(q) || (c.organizationType || '').toLowerCase().includes(q);
       return matchStatus && matchSearch;
     });
   }, [churches, filterStatus, searchQuery]);
@@ -86,9 +86,9 @@ const DatabasePage: React.FC<Props> = ({ onBack }) => {
 
   function exportCsv() {
     const esc = (v: any) => v == null ? '""' : `"${String(v).replace(/"/g, '""')}"`;
-    const headers = ['Church Name','Denomination','City','Address','Pastor','Phone','Website','Outreach Status','Saved At'];
+    const headers = ['Name','Org Type','City','Address','Pastor / Director','Phone','Website','Outreach Status','Saved At'];
     const rows = filtered.map(c => [
-      esc(c.name), esc(c.denomination), esc(c.city), esc(c.address),
+      esc(c.name), esc(c.organizationType), esc(c.city), esc(c.address),
       esc(c.pastor), esc(c.phone), esc(c.website),
       esc(STATUS_CONFIG[c.outreachStatus || 'not_contacted']?.label),
       esc(c.savedAt ? new Date(c.savedAt).toLocaleDateString() : '')
@@ -120,7 +120,7 @@ const DatabasePage: React.FC<Props> = ({ onBack }) => {
             BACK TO SEARCH
           </button>
           <h2 className="text-sm font-black text-slate-900 uppercase tracking-widest border-l-4 border-slate-900 pl-4">
-            DATABASE — {counts.all} CHURCHES
+            DATABASE — {counts.all} RECORDS
           </h2>
         </div>
         <div className="flex items-center gap-3">
@@ -159,7 +159,7 @@ const DatabasePage: React.FC<Props> = ({ onBack }) => {
         {/* Search box */}
         <input
           type="text"
-          placeholder="Search by name, city, denomination..."
+          placeholder="Search by name, city, org type..."
           value={searchQuery}
           onChange={e => setSearchQuery(e.target.value)}
           className="ml-auto px-3 py-1.5 border border-slate-300 rounded text-sm text-slate-900 bg-white focus:ring-2 focus:ring-slate-400 outline-none w-64"
@@ -180,15 +180,15 @@ const DatabasePage: React.FC<Props> = ({ onBack }) => {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4" />
             </svg>
             <p className="font-bold uppercase tracking-widest text-sm">
-              {churches.length === 0 ? 'No churches saved yet — run a search and save results' : 'No churches match your filters'}
+              {churches.length === 0 ? 'No records saved yet — run a search and save results' : 'No records match your filters'}
             </p>
           </div>
         ) : (
           <table className="w-full text-left border-collapse min-w-[1100px]">
             <thead className="sticky top-0 z-10 bg-slate-200 border-b border-slate-400">
               <tr>
-                <th className="px-4 py-3 text-xs font-bold text-slate-700 uppercase border-r border-slate-300 w-[220px]">Church</th>
-                <th className="px-4 py-3 text-xs font-bold text-slate-700 uppercase border-r border-slate-300 w-[160px]">Denomination</th>
+                <th className="px-4 py-3 text-xs font-bold text-slate-700 uppercase border-r border-slate-300 w-[220px]">Name</th>
+                <th className="px-4 py-3 text-xs font-bold text-slate-700 uppercase border-r border-slate-300 w-[160px]">Org Type</th>
                 <th className="px-4 py-3 text-xs font-bold text-slate-700 uppercase border-r border-slate-300 w-[180px]">City</th>
                 <th className="px-4 py-3 text-xs font-bold text-slate-700 uppercase border-r border-slate-300 w-[150px]">Pastor</th>
                 <th className="px-4 py-3 text-xs font-bold text-slate-700 uppercase border-r border-slate-300 w-[140px]">Phone</th>
@@ -207,7 +207,7 @@ const DatabasePage: React.FC<Props> = ({ onBack }) => {
                     <td className="px-4 py-3 border-r border-slate-200">
                       <span className="font-bold text-sm text-slate-900 leading-tight block">{church.name}</span>
                     </td>
-                    <td className="px-4 py-3 border-r border-slate-200 text-sm text-slate-600">{church.denomination}</td>
+                    <td className="px-4 py-3 border-r border-slate-200 text-sm text-slate-600">{church.organizationType || '—'}</td>
                     <td className="px-4 py-3 border-r border-slate-200 text-sm text-slate-600">{church.city}</td>
                     <td className="px-4 py-3 border-r border-slate-200 text-sm text-slate-600">{church.pastor || '—'}</td>
                     <td className="px-4 py-3 border-r border-slate-200 text-sm text-slate-600">{church.phone || '—'}</td>

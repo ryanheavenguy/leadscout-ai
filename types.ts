@@ -4,7 +4,7 @@ export type OutreachStatus = 'not_contacted' | 'contacted' | 'responded' | 'conv
 export interface Church {
   id: string;
   name: string;
-  denomination: string;
+  organizationType?: string;
   address: string;
   city: string;
   website?: string;
@@ -26,11 +26,9 @@ export interface Church {
 
 export interface ChurchSearchParams {
   country: string;
-  location: string;
-  denomination: string;
-  congregationSize: string;
-  churchAge: string;
-  serviceStyle: string;
+  location?: string;
+  includeChurches: boolean;
+  includeMinistries: boolean;
   keywords: string;
   quantity: number;
 }
@@ -48,7 +46,7 @@ export interface ChurchResearch {
 export interface BatchChurchResearch {
   globalInsights: string;
   trends: string[];
-  denominationalSpread: string;
+  organizationalSpread: string;
   individualInsights: Record<string, ChurchResearch>;
 }
 

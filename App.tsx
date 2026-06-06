@@ -1,14 +1,43 @@
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
+import { Session } from '@supabase/supabase-js';
 import { Church, ChurchSearchParams, ChurchResearch, BatchChurchResearch, AppStatus, ViewMode } from './types';
+import { supabase, isSupabaseConfigured } from './lib/supabase';
 import { churchService } from './services/churchService';
 import ChurchCard from './components/ChurchCard';
 import ChurchResearchPanel from './components/ChurchResearchPanel';
 import DatabasePage from './components/DatabasePage';
+import Login from './components/Login';
 import { COUNTRIES } from './constants/countries';
-import { DENOMINATION_GROUPS, CONGREGATION_SIZES, CHURCH_AGES, SERVICE_STYLES } from './constants/denominations';
 
 const App: React.FC = () => {
+  // ─── Auth state ─────────────────────────────────────────────────────────────
+  const [session, setSession]             = useState<Session | null>(null);
+  const [authLoading, setAuthLoading]     = useState(true);
+  const [isRecovery, setIsRecovery]       = useState(false);
+
+  useEffect(() => {
+    if (!isSupabaseConfigured) {
+      setAuthLoading(false);
+      return;
+    }
+    supabase.auth.getSession().then(({ data }) => {
+      setSession(data.session);
+      setAuthLoading(false);
+    });
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      setSession(session);
+      if (event === 'PASSWORD_RECOVERY') {
+        setIsRecovery(true);
+      } else if (event === 'USER_UPDATED') {
+        setIsRecovery(false);
+      }
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
   // ─── App state ─────────────────────────────────────────────────────────────
   const [status, setStatus]               = useState<AppStatus>(AppStatus.IDLE);
   const [viewMode, setViewMode]           = useState<ViewMode>('GRID');
@@ -27,11 +56,9 @@ const App: React.FC = () => {
 
   const initialForm: ChurchSearchParams = {
     country: 'US',
-    location: 'Nashville, TN',
-    denomination: 'Any Protestant',
-    congregationSize: 'Any Size',
-    churchAge: 'Any Age',
-    serviceStyle: 'Any Style',
+    location: '',
+    includeChurches: true,
+    includeMinistries: false,
     keywords: '',
     quantity: 20
   };
@@ -99,8 +126,8 @@ const App: React.FC = () => {
     setSaveStatus(null);
 
     try {
-      // Load previously saved church names to exclude them from new results
-      const savedNames = await churchService.getSavedChurchNames();
+      // Load previously saved church names for this country to exclude from new results
+      const savedNames = await churchService.getSavedChurchNames(form.country);
 
       const { churches: results } = await churchService.searchChurches(
         form,
@@ -176,7 +203,7 @@ const App: React.FC = () => {
       setBatchResearch({
         globalInsights: batchSummary.globalInsights || '',
         trends: batchSummary.trends || [],
-        denominationalSpread: batchSummary.denominationalSpread || '',
+        organizationalSpread: batchSummary.organizationalSpread || '',
         individualInsights: individualResults
       });
 
@@ -220,14 +247,14 @@ const App: React.FC = () => {
     };
 
     const headers = [
-      'Church Name', 'Denomination', 'Address', 'City', 'Website',
-      'Phone', 'Email', 'Pastor', 'Founded', 'Congregation Size',
+      'Name', 'Org Type', 'Address', 'City', 'Website',
+      'Phone', 'Email', 'Pastor / Director', 'Founded', 'Size',
       'Service Times', 'Facebook', 'Instagram', 'YouTube',
       'Description', 'Confidence Score', 'Source Evidence'
     ];
 
     const rows = toExport.map(c => [
-      esc(c.name), esc(c.denomination), esc(c.address), esc(c.city),
+      esc(c.name), esc(c.organizationType), esc(c.address), esc(c.city),
       esc(c.website), esc(c.phone), esc(c.email), esc(c.pastor),
       esc(c.founded), esc(c.congregationSize), esc(c.serviceTimes),
       esc(c.facebook), esc(c.instagram), esc(c.youtube),
@@ -239,12 +266,42 @@ const App: React.FC = () => {
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `ChurchFinder_${new Date().toISOString().replace(/[:.]/g, '-')}.csv`;
+    const typeLabel = form.includeChurches && form.includeMinistries ? 'ChurchesAndMinistries' : form.includeMinistries ? 'Ministries' : 'Churches';
+    link.download = `${typeLabel}_${new Date().toISOString().replace(/[:.]/g, '-')}.csv`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
     setTimeout(() => URL.revokeObjectURL(url), 100);
   };
+
+  // ─── Auth gate ──────────────────────────────────────────────────────────────
+  if (authLoading) {
+    return (
+      <div className="fixed inset-0 bg-slate-900 flex items-center justify-center">
+        <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  if (!isSupabaseConfigured) {
+    return (
+      <div className="fixed inset-0 bg-slate-900 flex items-center justify-center p-8">
+        <div className="bg-white/10 border border-white/20 rounded-2xl p-8 max-w-lg w-full text-center space-y-4">
+          <div className="w-12 h-12 bg-yellow-400 rounded-xl flex items-center justify-center mx-auto text-2xl">⚙️</div>
+          <h2 className="text-white font-black text-xl">Supabase Setup Required</h2>
+          <p className="text-slate-300 text-sm leading-relaxed">
+            Add your Supabase credentials to <code className="bg-slate-700 px-1.5 py-0.5 rounded text-yellow-300">.env</code> then restart the server:
+          </p>
+          <pre className="bg-slate-800 rounded-xl p-4 text-left text-xs text-green-300 leading-relaxed whitespace-pre-wrap">{`VITE_SUPABASE_URL=https://xxxx.supabase.co\nVITE_SUPABASE_ANON_KEY=eyJhbGc...\nSUPABASE_JWT_SECRET=your-jwt-secret`}</pre>
+          <p className="text-slate-400 text-xs">Then run <code className="bg-slate-700 px-1.5 py-0.5 rounded text-slate-200">npm run dev:full</code></p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!session || isRecovery) {
+    return <Login isRecovery={isRecovery} onRecoveryComplete={() => setIsRecovery(false)} />;
+  }
 
   // ─── Database view ──────────────────────────────────────────────────────────
   if (showDatabase) {
@@ -264,6 +321,17 @@ const App: React.FC = () => {
             >
               DATABASE
             </button>
+            <div className="ml-auto">
+              <button
+                onClick={() => supabase?.auth.signOut()}
+                className="px-3 py-1 text-xs font-bold text-slate-400 hover:text-white transition-colors rounded flex items-center gap-1.5"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+                </svg>
+                LOGOUT
+              </button>
+            </div>
           </div>
           <DatabasePage onBack={() => setShowDatabase(false)} />
         </main>
@@ -322,7 +390,7 @@ const App: React.FC = () => {
             </div>
             {searchMode === 'PLACES' && (
               <p className="text-[9px] text-slate-400 mt-1.5 leading-tight">
-                Real verified locations. Only Location + Denomination are used.
+                Real verified locations. Only Location + Org Type are used.
               </p>
             )}
           </div>
@@ -349,10 +417,10 @@ const App: React.FC = () => {
             </div>
 
             <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase mb-1.5">Location</label>
+              <label className="block text-xs font-bold text-slate-700 uppercase mb-1.5">Location <span className="normal-case font-normal text-slate-400">(optional)</span></label>
               <input
                 type="text"
-                value={form.location}
+                value={form.location ?? ''}
                 onChange={e => setForm(f => ({ ...f, location: e.target.value }))}
                 placeholder="e.g. Nashville, TN or London"
                 className="w-full px-4 py-2.5 bg-slate-50 border border-slate-300 rounded-md text-sm font-medium text-slate-900 focus:ring-2 focus:ring-slate-400 outline-none"
@@ -360,61 +428,42 @@ const App: React.FC = () => {
             </div>
 
             <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase mb-1.5">Denomination</label>
-              <select
-                value={form.denomination}
-                onChange={e => setForm(f => ({ ...f, denomination: e.target.value }))}
-                className="w-full px-4 py-2.5 bg-slate-50 border border-slate-300 rounded-md text-sm font-medium text-slate-900 focus:ring-2 focus:ring-slate-400 outline-none"
-              >
-                <option value="Any Protestant">Any Protestant</option>
-                {DENOMINATION_GROUPS.map(g => (
-                  <optgroup key={g.group} label={g.group}>
-                    {g.options.map(opt => (
-                      <option key={opt} value={opt}>{opt}</option>
-                    ))}
-                  </optgroup>
-                ))}
-              </select>
+              <label className="block text-xs font-bold text-slate-700 uppercase mb-1.5">Search For</label>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setForm(f => {
+                    const next = !f.includeChurches;
+                    // Prevent both being off
+                    if (!next && !f.includeMinistries) return f;
+                    return { ...f, includeChurches: next };
+                  })}
+                  className={`flex-1 py-2 text-[10px] font-bold uppercase tracking-wider rounded-md border transition-colors ${
+                    form.includeChurches
+                      ? 'bg-slate-900 text-white border-slate-900'
+                      : 'bg-white text-slate-500 border-slate-300 hover:bg-slate-100'
+                  }`}
+                >
+                  ⛪ Churches
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setForm(f => {
+                    const next = !f.includeMinistries;
+                    if (!next && !f.includeChurches) return f;
+                    return { ...f, includeMinistries: next };
+                  })}
+                  className={`flex-1 py-2 text-[10px] font-bold uppercase tracking-wider rounded-md border transition-colors ${
+                    form.includeMinistries
+                      ? 'bg-slate-900 text-white border-slate-900'
+                      : 'bg-white text-slate-500 border-slate-300 hover:bg-slate-100'
+                  }`}
+                >
+                  ✝ Ministries
+                </button>
+              </div>
             </div>
 
-            <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase mb-1.5">Congregation Size</label>
-              <select
-                value={form.congregationSize}
-                onChange={e => setForm(f => ({ ...f, congregationSize: e.target.value }))}
-                className="w-full px-4 py-2.5 bg-slate-50 border border-slate-300 rounded-md text-sm font-medium text-slate-900 focus:ring-2 focus:ring-slate-400 outline-none"
-              >
-                {CONGREGATION_SIZES.map(s => (
-                  <option key={s} value={s}>{s}</option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase mb-1.5">Church Age</label>
-              <select
-                value={form.churchAge}
-                onChange={e => setForm(f => ({ ...f, churchAge: e.target.value }))}
-                className="w-full px-4 py-2.5 bg-slate-50 border border-slate-300 rounded-md text-sm font-medium text-slate-900 focus:ring-2 focus:ring-slate-400 outline-none"
-              >
-                {CHURCH_AGES.map(a => (
-                  <option key={a} value={a}>{a}</option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase mb-1.5">Service Style</label>
-              <select
-                value={form.serviceStyle}
-                onChange={e => setForm(f => ({ ...f, serviceStyle: e.target.value }))}
-                className="w-full px-4 py-2.5 bg-slate-50 border border-slate-300 rounded-md text-sm font-medium text-slate-900 focus:ring-2 focus:ring-slate-400 outline-none"
-              >
-                {SERVICE_STYLES.map(s => (
-                  <option key={s} value={s}>{s}</option>
-                ))}
-              </select>
-            </div>
 
             <div>
               <label className="block text-xs font-bold text-slate-700 uppercase mb-1.5 flex justify-between">
@@ -441,7 +490,7 @@ const App: React.FC = () => {
                 value={form.keywords}
                 onChange={e => setForm(f => ({ ...f, keywords: e.target.value }))}
                 className="w-full px-4 py-2.5 bg-slate-50 border border-slate-300 rounded-md text-sm font-medium text-slate-900 focus:ring-2 focus:ring-slate-400 outline-none h-20 resize-none"
-                placeholder="e.g. missions-focused, growing, family ministry"
+                placeholder={form.includeMinistries && !form.includeChurches ? 'e.g. youth, missions, food pantry, counseling' : form.includeChurches && form.includeMinistries ? 'e.g. missions, youth, food pantry' : 'e.g. missions-focused, growing, family ministry'}
               />
             </div>
           </form>
@@ -457,7 +506,7 @@ const App: React.FC = () => {
                   <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
                   SEARCHING...
                 </>
-              ) : 'FIND CHURCHES'}
+              ) : (form.includeChurches && form.includeMinistries) ? 'FIND CHURCHES & MINISTRIES' : form.includeMinistries ? 'FIND MINISTRIES' : 'FIND CHURCHES'}
             </button>
           </div>
         </div>
@@ -482,6 +531,17 @@ const App: React.FC = () => {
             </svg>
             DATABASE
           </button>
+          <div className="ml-auto">
+            <button
+              onClick={() => supabase?.auth.signOut()}
+              className="px-3 py-1 text-xs font-bold text-slate-400 hover:text-white transition-colors rounded flex items-center gap-1.5"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+              </svg>
+              LOGOUT
+            </button>
+          </div>
         </div>
 
         {/* Header bar */}
@@ -510,7 +570,7 @@ const App: React.FC = () => {
               <h2 className="text-sm font-black text-slate-900 uppercase tracking-widest border-l-4 border-slate-900 pl-4">
                 {status === AppStatus.SEARCHING
                   ? 'SEARCHING...'
-                  : `RESULTS: ${churches.length} CHURCHES`}
+                  : `RESULTS: ${churches.length} ${(form.includeChurches && form.includeMinistries) ? 'RESULTS' : form.includeMinistries ? 'MINISTRIES' : 'CHURCHES'}`}
               </h2>
             )}
           </div>
@@ -591,7 +651,9 @@ const App: React.FC = () => {
                 <div className="flex-1 flex flex-col items-center justify-center bg-slate-50 p-10">
                   <div className="w-full max-w-xl space-y-8 text-center">
                     <div>
-                      <h3 className="text-3xl font-black text-slate-900 mb-2">Finding Churches</h3>
+                      <h3 className="text-3xl font-black text-slate-900 mb-2">
+                        {(form.includeChurches && form.includeMinistries) ? 'Finding Churches & Ministries' : form.includeMinistries ? 'Finding Ministries' : 'Finding Churches'}
+                      </h3>
                       <p className="text-slate-500 font-medium">Searching the web and verifying results...</p>
                     </div>
                     <div className="relative">
@@ -647,7 +709,9 @@ const App: React.FC = () => {
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 2v4M5 10h14M5 10v10a1 1 0 001 1h4v-4h4v4h4a1 1 0 001-1V10M5 10l-1-4h16l-1 4" />
                     </svg>
                   </div>
-                  <p className="text-base font-bold uppercase tracking-widest">Enter a location and click Find Churches</p>
+                  <p className="text-base font-bold uppercase tracking-widest">
+                    {(form.includeChurches && form.includeMinistries) ? 'Enter a location and click Find Churches & Ministries' : form.includeMinistries ? 'Enter a location and click Find Ministries' : 'Enter a location and click Find Churches'}
+                  </p>
                 </div>
               )}
             </div>
@@ -688,10 +752,10 @@ const App: React.FC = () => {
                         <p className="text-sm text-slate-700 leading-relaxed">{batchResearch.globalInsights}</p>
                       </div>
 
-                      {batchResearch.denominationalSpread && (
+                      {batchResearch.organizationalSpread && (
                         <div>
-                          <h3 className="text-xs font-black text-slate-900 uppercase tracking-widest mb-3">Denominational Spread</h3>
-                          <p className="text-sm text-slate-700 leading-relaxed">{batchResearch.denominationalSpread}</p>
+                          <h3 className="text-xs font-black text-slate-900 uppercase tracking-widest mb-3">Organizational Spread</h3>
+                          <p className="text-sm text-slate-700 leading-relaxed">{batchResearch.organizationalSpread}</p>
                         </div>
                       )}
 
@@ -719,7 +783,9 @@ const App: React.FC = () => {
                             <div className="flex items-start justify-between gap-2 mb-2">
                               <div>
                                 <span className="text-sm font-black text-slate-900">{church.name}</span>
-                                <span className="text-xs text-slate-500 ml-2">{church.denomination}</span>
+                                {church.organizationType && (
+                                  <span className="text-xs text-slate-500 ml-2">{church.organizationType}</span>
+                                )}
                               </div>
                               <span className="text-[10px] text-slate-400 shrink-0">{church.city}</span>
                             </div>

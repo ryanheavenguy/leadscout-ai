@@ -1,11 +1,23 @@
 
 import { Church, ChurchSearchParams, ChurchResearch, BatchChurchResearch, OutreachStatus } from '../types';
+import { supabase } from '../lib/supabase';
 
 const BATCH_SIZE = 10;
 
 export class ChurchService {
   private sanitizeInput(val: string, maxLen = 300): string {
     return val.trim().replace(/[<>]/g, '').slice(0, maxLen);
+  }
+
+  private async authedFetch(url: string, options: RequestInit = {}): Promise<Response> {
+    const { data: { session } } = await supabase.auth.getSession();
+    return fetch(url, {
+      ...options,
+      headers: {
+        ...(options.headers as Record<string, string> || {}),
+        ...(session ? { 'Authorization': `Bearer ${session.access_token}` } : {})
+      }
+    });
   }
 
   private async callWithRetry(fn: () => Promise<any>, maxRetries = 3): Promise<any> {
@@ -75,17 +87,14 @@ export class ChurchService {
     excludeList: string
   ): Promise<{ churches: Church[]; sources: any[] }> {
     return this.callWithRetry(async () => {
-      const response = await fetch('/api/search-churches', {
+      const response = await this.authedFetch('/api/search-churches', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
         body: JSON.stringify({
           country: this.sanitizeInput(params.country),
-          location: this.sanitizeInput(params.location),
-          denomination: this.sanitizeInput(params.denomination),
-          congregationSize: this.sanitizeInput(params.congregationSize),
-          churchAge: this.sanitizeInput(params.churchAge),
-          serviceStyle: this.sanitizeInput(params.serviceStyle),
+          location: this.sanitizeInput(params.location || ''),
+          includeChurches: params.includeChurches,
+          includeMinistries: params.includeMinistries,
           keywords: this.sanitizeInput(params.keywords),
           quantity: batchSize,
           excludeList: this.sanitizeInput(excludeList, 2000),
@@ -109,10 +118,9 @@ export class ChurchService {
 
   async deepResearch(church: Church): Promise<ChurchResearch> {
     return this.callWithRetry(async () => {
-      const response = await fetch('/api/research-church', {
+      const response = await this.authedFetch('/api/research-church', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
         body: JSON.stringify({ church })
       });
 
@@ -125,25 +133,27 @@ export class ChurchService {
     });
   }
 
-  async getSavedChurchNames(): Promise<string[]> {
+  async getSavedChurchNames(country?: string): Promise<string[]> {
     try {
-      const response = await fetch('/api/db/church-names', { credentials: 'include' });
+      const url = country
+        ? `/api/db/church-names?country=${encodeURIComponent(country)}`
+        : '/api/db/church-names';
+      const response = await this.authedFetch(url);
       if (!response.ok) return [];
       return response.json();
     } catch { return []; }
   }
 
   async getSavedChurches(): Promise<Church[]> {
-    const response = await fetch('/api/db/churches', { credentials: 'include' });
+    const response = await this.authedFetch('/api/db/churches');
     if (!response.ok) throw new Error('Failed to load database.');
     return response.json();
   }
 
   async saveChurches(churches: Church[]): Promise<{ added: number; total: number }> {
-    const response = await fetch('/api/db/churches', {
+    const response = await this.authedFetch('/api/db/churches', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
       body: JSON.stringify({ churches })
     });
     if (!response.ok) throw new Error('Failed to save churches.');
@@ -151,19 +161,17 @@ export class ChurchService {
   }
 
   async updateOutreachStatus(id: string, outreachStatus: OutreachStatus): Promise<void> {
-    const response = await fetch(`/api/db/churches/${id}`, {
+    const response = await this.authedFetch(`/api/db/churches/${id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
       body: JSON.stringify({ outreachStatus })
     });
     if (!response.ok) throw new Error('Failed to update status.');
   }
 
   async deleteChurch(id: string): Promise<void> {
-    const response = await fetch(`/api/db/churches/${id}`, {
-      method: 'DELETE',
-      credentials: 'include'
+    const response = await this.authedFetch(`/api/db/churches/${id}`, {
+      method: 'DELETE'
     });
     if (!response.ok) throw new Error('Failed to delete church.');
   }
@@ -174,13 +182,13 @@ export class ChurchService {
   ): Promise<{ churches: Church[] }> {
     if (onProgress) onProgress(20);
 
-    const response = await fetch('/api/search-churches-places', {
+    const response = await this.authedFetch('/api/search-churches-places', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
       body: JSON.stringify({
-        location: this.sanitizeInput(params.location),
-        denomination: this.sanitizeInput(params.denomination),
+        location: this.sanitizeInput(params.location || ''),
+        includeChurches: params.includeChurches,
+        includeMinistries: params.includeMinistries,
         quantity: params.quantity
       })
     });
@@ -196,10 +204,9 @@ export class ChurchService {
   }
 
   async summarizeChurchesFromPlaces(churches: Church[]): Promise<Record<string, string>> {
-    const response = await fetch('/api/summarize-churches-from-places', {
+    const response = await this.authedFetch('/api/summarize-churches-from-places', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
       body: JSON.stringify({ churches })
     });
 
@@ -217,10 +224,9 @@ export class ChurchService {
     results: ChurchResearch[]
   ): Promise<Partial<BatchChurchResearch>> {
     return this.callWithRetry(async () => {
-      const response = await fetch('/api/batch-summarize-churches', {
+      const response = await this.authedFetch('/api/batch-summarize-churches', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
         body: JSON.stringify({ churches, results })
       });
 

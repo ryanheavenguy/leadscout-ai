@@ -62,14 +62,16 @@ const ChurchCard: React.FC<ChurchCardProps> = ({
         />
       </td>
 
-      {/* Church Name + Denomination */}
+      {/* Name + Org Type */}
       <td className={`sticky left-[50px] z-30 px-4 py-3 border-r border-slate-200 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)] ${stickyBg}`}>
         <div className="flex flex-col gap-1">
           <span className="text-sm font-bold text-slate-900 truncate max-w-[170px]">{church.name}</span>
           <div className="flex items-center gap-1.5">
-            <span className="text-[10px] font-bold text-slate-500 uppercase truncate max-w-[120px]">
-              {church.denomination}
-            </span>
+            {church.organizationType && (
+              <span className="text-[10px] font-bold text-slate-500 uppercase truncate max-w-[120px]">
+                {church.organizationType}
+              </span>
+            )}
             {church.confidenceScore !== undefined && (
               <span
                 className={`text-[8px] px-1.5 py-0.5 rounded-full border font-black ${getConfColor(church.confidenceScore)}`}

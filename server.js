@@ -1,16 +1,15 @@
-'use strict';
+import 'dotenv/config';
+import express from 'express';
+import rateLimit from 'express-rate-limit';
+import cors from 'cors';
+import helmet from 'helmet';
+import jwt from 'jsonwebtoken';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import { GoogleGenAI, Type } from '@google/genai';
 
-require('dotenv').config();
-
-const express = require('express');
-const rateLimit = require('express-rate-limit');
-const cors = require('cors');
-const helmet = require('helmet');
-const session = require('express-session');
-const crypto = require('crypto');
-const fs = require('fs');
-const path = require('path');
-const { GoogleGenAI, Type } = require('@google/genai');
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // ─── Simple JSON file database ────────────────────────────────────────────────
 const DB_PATH = path.join(__dirname, 'churches-db.json');
@@ -26,7 +25,35 @@ function writeDb(data) {
   fs.writeFileSync(DB_PATH, JSON.stringify(data, null, 2), 'utf8');
 }
 
+// Fix 3: Serialize all DB reads+writes to prevent race-condition data loss
+let _dbLock = Promise.resolve();
+async function withDbLock(fn) {
+  let unlock;
+  const prev = _dbLock;
+  _dbLock = new Promise(r => { unlock = r; });
+  try {
+    await prev;
+    return await fn();
+  } finally {
+    unlock();
+  }
+}
+
+// Fix 5: Allowlist of fields that may be persisted — blocks arbitrary field injection
+const ALLOWED_CHURCH_FIELDS = new Set([
+  'id', 'name', 'organizationType', 'address', 'city', 'website', 'phone', 'email',
+  'pastor', 'founded', 'congregationSize', 'serviceTimes', 'description',
+  'facebook', 'instagram', 'youtube', 'confidenceScore', 'sourceEvidence',
+  'industry', 'location', 'country'
+]);
+function pickAllowed(church) {
+  return Object.fromEntries(
+    Object.entries(church).filter(([k]) => ALLOWED_CHURCH_FIELDS.has(k))
+  );
+}
+
 const app = express();
+app.set('trust proxy', 1); // Fix 7: correct client IP behind reverse proxy
 const PORT = process.env.PORT || 3001;
 const MODEL_NAME = 'gemini-3-flash-preview';
 
@@ -46,33 +73,14 @@ app.use(helmet({
   }
 }));
 
-// ─── Session ──────────────────────────────────────────────────────────────────
-if (!process.env.SESSION_SECRET) {
-  console.error('[server] FATAL: SESSION_SECRET environment variable is not set. Set it in your .env file.');
-  process.exit(1);
-}
-
-app.use(session({
-  secret: process.env.SESSION_SECRET,
-  resave: false,
-  saveUninitialized: false,
-  cookie: {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: 'strict',
-    maxAge: 8 * 60 * 60 * 1000 // 8 hours
-  }
-}));
-
-// ─── CORS (credentials: true so session cookie is forwarded through Vite proxy)
+// ─── CORS ─────────────────────────────────────────────────────────────────────
 app.use(cors({
   origin: ['http://localhost:5173', 'http://localhost:4173'],
   methods: ['GET', 'POST', 'PATCH', 'DELETE'],
-  allowedHeaders: ['Content-Type'],
-  credentials: true
+  allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
-app.use(express.json());
+app.use(express.json({ limit: '200kb' })); // Fix 9: explicit body size cap
 
 // ─── Rate limiting ────────────────────────────────────────────────────────────
 const apiLimiter = rateLimit({
@@ -126,48 +134,20 @@ async function callWithRetry(fn, maxRetries = 3) {
 
 // ─── Auth middleware ──────────────────────────────────────────────────────────
 function requireAuth(req, res, next) {
-  if (req.session?.authenticated) return next();
-  res.status(401).json({ error: 'Unauthorized' });
+  const token = req.headers.authorization?.split(' ')[1];
+  if (!token) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    // Fix 2: decode and attach the payload so routes can scope to req.user.sub
+    req.user = jwt.verify(token, process.env.SUPABASE_JWT_SECRET, { algorithms: ['HS256'] });
+    next();
+  } catch {
+    res.status(401).json({ error: 'Invalid or expired token' });
+  }
 }
 
-// ─── Public routes (must be defined before the requireAuth middleware) ────────
+// ─── Public routes ────────────────────────────────────────────────────────────
 app.get('/api/health', (req, res) => {
   res.json({ ok: true });
-});
-
-app.post('/api/login', (req, res) => {
-  const { username, password } = req.body;
-  const envUser = process.env.APP_USERNAME;
-  const envPass = process.env.APP_PASSWORD;
-
-  if (!envUser || !envPass) {
-    return res.status(500).json({ error: 'Authentication not configured on server.' });
-  }
-
-  const usernameMatch = typeof username === 'string' &&
-    username.trim().toLowerCase() === envUser.toLowerCase();
-  const passwordMatch = typeof password === 'string' &&
-    password.length === envPass.length &&
-    crypto.timingSafeEqual(Buffer.from(password.trim()), Buffer.from(envPass));
-
-  if (usernameMatch && passwordMatch) {
-    req.session.authenticated = true;
-    req.session.username = username.trim();
-    return res.json({ ok: true, username: username.trim() });
-  }
-
-  res.status(401).json({ error: 'Invalid username or password.' });
-});
-
-app.post('/api/logout', (req, res) => {
-  req.session.destroy(() => res.json({ ok: true }));
-});
-
-app.get('/api/me', (req, res) => {
-  if (req.session?.authenticated) {
-    return res.json({ authenticated: true, username: req.session.username });
-  }
-  res.json({ authenticated: false });
 });
 
 // ─── Auth guard for all remaining /api routes ─────────────────────────────────
@@ -175,19 +155,28 @@ app.use('/api', requireAuth);
 
 // ─── GET /api/db/churches ─────────────────────────────────────────────────────
 app.get('/api/db/churches', (req, res) => {
-  res.json(readDb());
+  const userId = req.user.sub;
+  // Fix 2: only return records belonging to the requesting user
+  res.json(readDb().filter(c => c.userId === userId));
 });
 
 // ─── GET /api/db/church-names ─────────────────────────────────────────────────
-// Returns just names for the exclusion list when running a new search
+// Returns names for the exclusion list when running a new search.
+// Pass ?country=XX to scope results to that country only.
 app.get('/api/db/church-names', (req, res) => {
-  const db = readDb();
-  res.json(db.map(c => c.name));
+  const userId = req.user.sub;
+  // Fix 2: scope to the requesting user before filtering by country
+  const db = readDb().filter(c => c.userId === userId);
+  const country = typeof req.query.country === 'string' ? req.query.country.trim().toUpperCase() : null;
+  const filtered = country
+    ? db.filter(c => !c.country || c.country.toUpperCase() === country)
+    : db;
+  res.json(filtered.map(c => c.name));
 });
 
 // ─── POST /api/db/churches ────────────────────────────────────────────────────
 // Saves churches to the DB; skips duplicates (matched by name + city)
-app.post('/api/db/churches', (req, res) => {
+app.post('/api/db/churches', async (req, res) => {
   const { churches } = req.body;
   if (!Array.isArray(churches) || churches.length === 0) {
     return res.status(400).json({ error: 'churches must be a non-empty array.' });
@@ -196,29 +185,37 @@ app.post('/api/db/churches', (req, res) => {
     return res.status(400).json({ error: 'Maximum 200 churches per save.' });
   }
 
-  const db = readDb();
-  let added = 0;
-  for (const church of churches) {
-    if (!church || typeof church.name !== 'string') continue;
-    const key = `${church.name.toLowerCase().trim()}|${(church.city || '').toLowerCase().trim()}`;
-    const exists = db.some(c =>
-      `${c.name.toLowerCase().trim()}|${(c.city || '').toLowerCase().trim()}` === key
-    );
-    if (!exists) {
-      db.push({
-        ...church,
-        savedAt: new Date().toISOString(),
-        outreachStatus: 'not_contacted'
-      });
-      added++;
+  const userId = req.user.sub;
+  // Fix 2 + 3 + 5: user-scoped, serialized writes, allowlisted fields only
+  const { added, total } = await withDbLock(() => {
+    const db = readDb();
+    let added = 0;
+    for (const church of churches) {
+      if (!church || typeof church.name !== 'string') continue;
+      const key = `${church.name.toLowerCase().trim()}|${(church.city || '').toLowerCase().trim()}`;
+      const exists = db.some(c =>
+        c.userId === userId &&
+        `${c.name.toLowerCase().trim()}|${(c.city || '').toLowerCase().trim()}` === key
+      );
+      if (!exists) {
+        db.push({
+          ...pickAllowed(church),
+          userId,
+          savedAt: new Date().toISOString(),
+          outreachStatus: 'not_contacted'
+        });
+        added++;
+      }
     }
-  }
-  writeDb(db);
-  res.json({ ok: true, added, total: db.length });
+    writeDb(db);
+    const total = db.filter(c => c.userId === userId).length;
+    return { added, total };
+  });
+  res.json({ ok: true, added, total });
 });
 
 // ─── PATCH /api/db/churches/:id ───────────────────────────────────────────────
-app.patch('/api/db/churches/:id', (req, res) => {
+app.patch('/api/db/churches/:id', async (req, res) => {
   const { id } = req.params;
   const { outreachStatus } = req.body;
   const valid = ['not_contacted', 'contacted', 'responded', 'converted'];
@@ -226,23 +223,35 @@ app.patch('/api/db/churches/:id', (req, res) => {
     return res.status(400).json({ error: 'Invalid outreachStatus.' });
   }
 
-  const db = readDb();
-  const idx = db.findIndex(c => c.id === id);
-  if (idx === -1) return res.status(404).json({ error: 'Church not found.' });
-  db[idx].outreachStatus = outreachStatus;
-  writeDb(db);
-  res.json({ ok: true });
+  const userId = req.user.sub;
+  // Fix 2 + 3: verify ownership and serialize write
+  const result = await withDbLock(() => {
+    const db = readDb();
+    const idx = db.findIndex(c => c.id === id);
+    if (idx === -1) return { status: 404, body: { error: 'Church not found.' } };
+    if (db[idx].userId !== userId) return { status: 403, body: { error: 'Forbidden.' } };
+    db[idx].outreachStatus = outreachStatus;
+    writeDb(db);
+    return { status: 200, body: { ok: true } };
+  });
+  res.status(result.status).json(result.body);
 });
 
 // ─── DELETE /api/db/churches/:id ─────────────────────────────────────────────
-app.delete('/api/db/churches/:id', (req, res) => {
+app.delete('/api/db/churches/:id', async (req, res) => {
   const { id } = req.params;
-  const db = readDb();
-  const idx = db.findIndex(c => c.id === id);
-  if (idx === -1) return res.status(404).json({ error: 'Church not found.' });
-  db.splice(idx, 1);
-  writeDb(db);
-  res.json({ ok: true });
+  const userId = req.user.sub;
+  // Fix 2 + 3: verify ownership and serialize write
+  const result = await withDbLock(() => {
+    const db = readDb();
+    const idx = db.findIndex(c => c.id === id);
+    if (idx === -1) return { status: 404, body: { error: 'Church not found.' } };
+    if (db[idx].userId !== userId) return { status: 403, body: { error: 'Forbidden.' } };
+    db.splice(idx, 1);
+    writeDb(db);
+    return { status: 200, body: { ok: true } };
+  });
+  res.status(result.status).json(result.body);
 });
 
 // ─── POST /api/search-leads ───────────────────────────────────────────────────
@@ -270,6 +279,8 @@ app.post('/api/search-leads', async (req, res) => {
     validatePromptField(industry, 'industry');
     validatePromptField(city, 'city');
     validatePromptField(keywords, 'keywords');
+    // Fix 1: excludeList was missing injection validation — newlines can reach the prompt
+    if (excludeList) validatePromptField(excludeList, 'excludeList');
 
     const result = await callWithRetry(async () => {
       // User inputs are wrapped in triple-quotes to delimit them from prompt instructions.
@@ -476,7 +487,7 @@ app.post('/api/batch-summarize', async (req, res) => {
 // ─── POST /api/search-churches ───────────────────────────────────────────────
 app.post('/api/search-churches', async (req, res) => {
   try {
-    let { country, location, denomination, congregationSize, churchAge, serviceStyle, keywords, quantity, excludeList, batchSize } = req.body;
+    let { country, location, includeChurches, includeMinistries, keywords, quantity, excludeList, batchSize } = req.body;
 
     if (!location) {
       return res.status(400).json({ error: 'location is required.' });
@@ -490,54 +501,75 @@ app.post('/api/search-churches', async (req, res) => {
       return res.status(400).json({ error: 'batchSize must be an integer between 1 and 30.' });
     }
 
+    const onlyMinistries = includeMinistries && !includeChurches;
+    const onlyChurches = includeChurches && !includeMinistries;
+    const both = includeChurches && includeMinistries;
+
     country = country ? sanitize(country) : '';
     location = sanitize(location);
-    denomination = denomination ? sanitize(denomination) : '';
-    congregationSize = congregationSize ? sanitize(congregationSize) : '';
-    churchAge = churchAge ? sanitize(churchAge) : '';
-    serviceStyle = serviceStyle ? sanitize(serviceStyle) : '';
     keywords = keywords ? sanitize(keywords) : '';
     excludeList = typeof excludeList === 'string' ? sanitize(excludeList, 2000) : '';
 
     validatePromptField(location, 'location');
-    if (denomination) validatePromptField(denomination, 'denomination');
-    if (congregationSize) validatePromptField(congregationSize, 'congregationSize');
-    if (churchAge) validatePromptField(churchAge, 'churchAge');
-    if (serviceStyle) validatePromptField(serviceStyle, 'serviceStyle');
     if (keywords) validatePromptField(keywords, 'keywords');
+    // Fix 6: country was missing injection validation
+    if (country) validatePromptField(country, 'country');
+    // Fix 1: excludeList was missing injection validation
+    if (excludeList) validatePromptField(excludeList, 'excludeList');
 
     const result = await callWithRetry(async () => {
-      const excludeClause = excludeList
-        ? `DO NOT include any of these already-found churches: [${excludeList}].`
-        : '';
-
       const locationLine = country
         ? `Location: """${location}""", Country: """${country}"""`
         : `Location: """${location}"""`;
 
-      const isAnyDenom = !denomination || denomination === 'Any Protestant';
-      const denomClause = isAnyDenom
-        ? `Denomination: Any Protestant denomination (exclude Catholic and Orthodox)`
-        : `Denomination or tradition: """${denomination}"""`;
-
-      const sizeClause = congregationSize && congregationSize !== 'Any Size'
-        ? `Congregation size: """${congregationSize}"""`
-        : '';
-      const ageClause = churchAge && churchAge !== 'Any Age'
-        ? `Church age / founding era: """${churchAge}"""`
-        : '';
-      const styleClause = serviceStyle && serviceStyle !== 'Any Style'
-        ? `Service style: """${serviceStyle}"""`
-        : '';
       const keywordsClause = keywords
-        ? `Additional filters/focus: """${keywords}"""`
+        ? `Focus / keywords: """${keywords}"""`
+        : '';
+      const excludeClause = excludeList
+        ? `DO NOT include any of these already-found organizations: [${excludeList}].`
         : '';
 
-      const filterLines = [denomClause, sizeClause, ageClause, styleClause, keywordsClause, excludeClause]
+      const filterLines = [keywordsClause, excludeClause]
         .filter(Boolean)
         .join('\n');
 
-      const prompt = `Task: Find ${batchSize} real, currently active Protestant Christian churches in the specified location. Use Google Search to verify each church exists.
+      let prompt;
+      if (both) {
+        prompt = `Task: Find ${batchSize} real, currently active Christian organizations — a mix of Protestant churches AND Christian ministry organizations (parachurch ministries, nonprofits, mission agencies, youth ministries, food/homeless ministries, counseling centers, campus ministries, etc.) — in the specified location. Use Google Search to verify each organization exists. Try to include a balanced mix of both churches and ministries.
+
+${locationLine}
+${filterLines}
+
+Instructions:
+1. Verify each organization has an active website, Google listing, or directory entry.
+2. Find the lead pastor, executive director, or primary leader name if publicly listed.
+3. Include the physical street address, phone number, and website URL.
+4. Write a 2-3 sentence description of the organization's identity, mission, and community focus.
+5. Include Facebook, Instagram, or YouTube page URLs if found.
+6. Set confidenceScore 0-100 based on how much verified data you actually found.
+7. In the organizationType field, describe what type of organization this is (e.g. "Baptist Church", "Non-Denominational Church", "Youth Ministry", "Missions Agency", "Food Pantry", "Campus Ministry").
+8. NEVER invent or hallucinate addresses, phone numbers, or names. Only report what you find.
+
+Return exactly ${batchSize} objects as a JSON array.`;
+      } else if (onlyMinistries) {
+        prompt = `Task: Find ${batchSize} real, currently active Christian ministry organizations (parachurch ministries, Christian nonprofits, mission agencies, youth ministries, food/homeless ministries, counseling centers, campus ministries, etc.) in the specified location. Use Google Search to verify each organization exists.
+
+${locationLine}
+${filterLines}
+
+Instructions:
+1. Search for real ministry organizations — verify each one has an active website, Google listing, or directory entry.
+2. Find the executive director, president, or primary leader name if publicly listed.
+3. Include the physical street address, phone number, and website URL.
+4. Write a 2-3 sentence description of the ministry's mission, focus area, and community impact.
+5. Include Facebook, Instagram, or YouTube page URLs if found.
+6. Set confidenceScore 0-100 based on how much verified data you actually found.
+7. In the organizationType field, describe what type of ministry this is (e.g. "Youth Ministry", "Missions Agency", "Food Pantry", "Campus Ministry", "Counseling Center").
+8. NEVER invent or hallucinate addresses, phone numbers, or leader names. Only report what you find.
+
+Return exactly ${batchSize} objects as a JSON array.`;
+      } else {
+        prompt = `Task: Find ${batchSize} real, currently active Protestant Christian churches in the specified location. Use Google Search to verify each church exists.
 
 ${locationLine}
 ${filterLines}
@@ -551,9 +583,11 @@ Instructions:
 6. Write a 2-3 sentence description of the church's identity, worship style, and community focus.
 7. Include Facebook, Instagram, or YouTube page URLs if found.
 8. Set confidenceScore 0-100 based on how much verified data you actually found (100 = full details confirmed).
-9. NEVER invent or hallucinate addresses, phone numbers, or pastor names. Only report what you find.
+9. In the organizationType field, describe the church tradition (e.g. "Baptist Church", "Non-Denominational", "Methodist Church").
+10. NEVER invent or hallucinate addresses, phone numbers, or pastor names. Only report what you find.
 
 Return exactly ${batchSize} objects as a JSON array.`;
+      }
 
       const response = await ai.models.generateContent({
         model: MODEL_NAME,
@@ -567,7 +601,7 @@ Return exactly ${batchSize} objects as a JSON array.`;
               type: Type.OBJECT,
               properties: {
                 name:             { type: Type.STRING },
-                denomination:     { type: Type.STRING },
+                organizationType: { type: Type.STRING },
                 address:          { type: Type.STRING },
                 city:             { type: Type.STRING },
                 website:          { type: Type.STRING, nullable: true },
@@ -584,7 +618,7 @@ Return exactly ${batchSize} objects as a JSON array.`;
                 confidenceScore:  { type: Type.NUMBER },
                 sourceEvidence:   { type: Type.STRING, nullable: true }
               },
-              required: ['name', 'denomination', 'address', 'description', 'confidenceScore']
+              required: ['name', 'organizationType', 'address', 'description', 'confidenceScore']
             }
           }
         }
@@ -595,7 +629,8 @@ Return exactly ${batchSize} objects as a JSON array.`;
       const churches = (Array.isArray(parsed) ? parsed : []).map((c, index) => ({
         ...c,
         id: `church-${Date.now()}-${index}-${Math.random().toString(36).substr(2, 5)}`,
-        city: c.city || location
+        city: c.city || location,
+        country: country || null
       }));
       const sources = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
       return { churches, sources };
@@ -679,7 +714,7 @@ Only report verified information. Do not invent details.`;
 // Finds real churches via Google Places Text Search API (no AI hallucination)
 app.post('/api/search-churches-places', async (req, res) => {
   try {
-    let { location, denomination, quantity } = req.body;
+    let { location, includeChurches, includeMinistries, quantity } = req.body;
 
     if (!location) {
       return res.status(400).json({ error: 'location is required.' });
@@ -692,11 +727,15 @@ app.post('/api/search-churches-places', async (req, res) => {
 
     quantity = Math.min(Math.max(Number(quantity) || 20, 1), 60);
     location = sanitize(location);
-    denomination = denomination ? sanitize(denomination) : '';
     validatePromptField(location, 'location');
 
-    const denomTerm = denomination && denomination !== 'Any Protestant' ? denomination : 'Protestant Christian';
-    const textQuery = `${denomTerm} church in ${location}`;
+    const bothTypes = includeChurches && includeMinistries;
+    const onlyMin = includeMinistries && !includeChurches;
+    const textQuery = bothTypes
+      ? `Christian church or ministry organization in ${location}`
+      : onlyMin
+        ? `Christian ministry nonprofit organization in ${location}`
+        : `Protestant Christian church in ${location}`;
 
     const allPlaces = [];
     let nextPageToken = null;
@@ -734,8 +773,8 @@ app.post('/api/search-churches-places', async (req, res) => {
 
     const churches = allPlaces.slice(0, quantity).map((p, i) => ({
       id: `place-${Date.now()}-${i}-${Math.random().toString(36).substr(2, 5)}`,
-      name: p.displayName?.text || 'Unknown Church',
-      denomination: denomination && denomination !== 'Any Protestant' ? denomination : 'Protestant',
+      name: p.displayName?.text || 'Unknown Organization',
+      organizationType: onlyMin ? 'Christian Ministry' : 'Protestant Church',
       address: p.formattedAddress || '',
       city: location,
       website: p.websiteUri || null,
@@ -756,7 +795,8 @@ app.post('/api/search-churches-places', async (req, res) => {
     res.json({ churches });
   } catch (err) {
     console.error('[/api/search-churches-places]', err);
-    res.status(500).json({ error: err.message || 'An internal error occurred.' });
+    // Fix 4: don't leak raw Google API error messages to the client
+    res.status(500).json({ error: 'An internal error occurred.' });
   }
 });
 
@@ -832,21 +872,21 @@ app.post('/api/batch-summarize-churches', async (req, res) => {
 
     const dataString = churches.map((c, i) => {
       const name = sanitize(c.name || '');
-      const denom = sanitize(c.denomination || '');
+      const orgType = sanitize(c.organizationType || '');
       const summary = sanitize(results[i]?.summary || '');
-      return `Church: ${name} (${denom})\nSummary: ${summary}`;
+      return `Organization: ${name}${orgType ? ` (${orgType})` : ''}\nSummary: ${summary}`;
     }).join('\n\n');
 
     const result = await callWithRetry(async () => {
-      const prompt = `Analyze this group of ${churches.length} churches and provide a collective summary.
+      const prompt = `Analyze this group of ${churches.length} Christian organizations and provide a collective summary.
 
 Data:
 ${dataString}
 
 Return:
-- globalInsights: A paragraph summarizing common themes, shared values, or patterns across these churches.
-- trends: 3-5 notable trends observed in this group (worship styles, community programs, demographics, etc.).
-- denominationalSpread: A brief description of the denominational or theological diversity in this group.`;
+- globalInsights: A paragraph summarizing common themes, shared values, or patterns across these organizations.
+- trends: 3-5 notable trends observed in this group (programs, demographics, community focus, etc.).
+- organizationalSpread: A brief description of the type and theological diversity in this group.`;
 
       const response = await ai.models.generateContent({
         model: MODEL_NAME,
@@ -856,11 +896,11 @@ Return:
           responseSchema: {
             type: Type.OBJECT,
             properties: {
-              globalInsights:      { type: Type.STRING },
-              trends:              { type: Type.ARRAY, items: { type: Type.STRING } },
-              denominationalSpread: { type: Type.STRING }
+              globalInsights:       { type: Type.STRING },
+              trends:               { type: Type.ARRAY, items: { type: Type.STRING } },
+              organizationalSpread: { type: Type.STRING }
             },
-            required: ['globalInsights', 'trends', 'denominationalSpread']
+            required: ['globalInsights', 'trends', 'organizationalSpread']
           }
         }
       });
