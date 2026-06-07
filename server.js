@@ -124,12 +124,13 @@ async function callWithRetry(fn, maxRetries = 3) {
 }
 
 // ─── Auth middleware ──────────────────────────────────────────────────────────
-function requireAuth(req, res, next) {
+async function requireAuth(req, res, next) {
   const token = req.headers.authorization?.split(' ')[1];
   if (!token) return res.status(401).json({ error: 'Unauthorized' });
   try {
-    // Fix 2: decode and attach the payload so routes can scope to req.user.sub
-    req.user = jwt.verify(token, process.env.SUPABASE_JWT_SECRET, { algorithms: ['HS256'] });
+    const { data: { user }, error } = await supabaseAdmin.auth.getUser(token);
+    if (error || !user) return res.status(401).json({ error: 'Invalid or expired token' });
+    req.user = { sub: user.id, ...user };
     next();
   } catch {
     res.status(401).json({ error: 'Invalid or expired token' });
