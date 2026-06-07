@@ -35,7 +35,7 @@ function pickAllowed(church) {
 const app = express();
 app.set('trust proxy', 1); // Fix 7: correct client IP behind reverse proxy
 const PORT = process.env.PORT || 3001;
-const MODEL_NAME = 'gemini-3-flash-preview';
+const MODEL_NAME = 'gemini-2.0-flash';
 
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
 
