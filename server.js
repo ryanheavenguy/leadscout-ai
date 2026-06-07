@@ -6,40 +6,18 @@ import rateLimit from 'express-rate-limit';
 import cors from 'cors';
 import helmet from 'helmet';
 import jwt from 'jsonwebtoken';
-import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { GoogleGenAI, Type } from '@google/genai';
+import { createClient } from '@supabase/supabase-js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// ─── Simple JSON file database ────────────────────────────────────────────────
-const DB_PATH = path.join(__dirname, 'churches-db.json');
-
-function readDb() {
-  try {
-    if (!fs.existsSync(DB_PATH)) return [];
-    return JSON.parse(fs.readFileSync(DB_PATH, 'utf8'));
-  } catch { return []; }
-}
-
-function writeDb(data) {
-  fs.writeFileSync(DB_PATH, JSON.stringify(data, null, 2), 'utf8');
-}
-
-// Fix 3: Serialize all DB reads+writes to prevent race-condition data loss
-let _dbLock = Promise.resolve();
-async function withDbLock(fn) {
-  let unlock;
-  const prev = _dbLock;
-  _dbLock = new Promise(r => { unlock = r; });
-  try {
-    await prev;
-    return await fn();
-  } finally {
-    unlock();
-  }
-}
+// ─── Supabase admin client (service role bypasses RLS; auth enforced in requireAuth) ──
+const supabaseAdmin = createClient(
+  process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '',
+  process.env.SUPABASE_SERVICE_ROLE_KEY || ''
+);
 
 // Fix 5: Allowlist of fields that may be persisted — blocks arbitrary field injection
 const ALLOWED_CHURCH_FIELDS = new Set([
@@ -156,24 +134,27 @@ app.get('/api/health', (req, res) => {
 app.use('/api', requireAuth);
 
 // ─── GET /api/db/churches ─────────────────────────────────────────────────────
-app.get('/api/db/churches', (req, res) => {
+app.get('/api/db/churches', async (req, res) => {
   const userId = req.user.sub;
-  // Fix 2: only return records belonging to the requesting user
-  res.json(readDb().filter(c => c.userId === userId));
+  const { data, error } = await supabaseAdmin
+    .from('churches')
+    .select('*')
+    .eq('userId', userId);
+  if (error) return res.status(500).json({ error: 'Failed to load churches.' });
+  res.json(data);
 });
 
 // ─── GET /api/db/church-names ─────────────────────────────────────────────────
 // Returns names for the exclusion list when running a new search.
 // Pass ?country=XX to scope results to that country only.
-app.get('/api/db/church-names', (req, res) => {
+app.get('/api/db/church-names', async (req, res) => {
   const userId = req.user.sub;
-  // Fix 2: scope to the requesting user before filtering by country
-  const db = readDb().filter(c => c.userId === userId);
   const country = typeof req.query.country === 'string' ? req.query.country.trim().toUpperCase() : null;
-  const filtered = country
-    ? db.filter(c => !c.country || c.country.toUpperCase() === country)
-    : db;
-  res.json(filtered.map(c => c.name));
+  let query = supabaseAdmin.from('churches').select('name, country').eq('userId', userId);
+  if (country) query = query.or(`country.is.null,country.ilike.${country}`);
+  const { data, error } = await query;
+  if (error) return res.status(500).json({ error: 'Failed to load church names.' });
+  res.json((data || []).map(c => c.name));
 });
 
 // ─── POST /api/db/churches ────────────────────────────────────────────────────
@@ -188,32 +169,28 @@ app.post('/api/db/churches', async (req, res) => {
   }
 
   const userId = req.user.sub;
-  // Fix 2 + 3 + 5: user-scoped, serialized writes, allowlisted fields only
-  const { added, total } = await withDbLock(() => {
-    const db = readDb();
-    let added = 0;
-    for (const church of churches) {
-      if (!church || typeof church.name !== 'string') continue;
-      const key = `${church.name.toLowerCase().trim()}|${(church.city || '').toLowerCase().trim()}`;
-      const exists = db.some(c =>
-        c.userId === userId &&
-        `${c.name.toLowerCase().trim()}|${(c.city || '').toLowerCase().trim()}` === key
-      );
-      if (!exists) {
-        db.push({
-          ...pickAllowed(church),
-          userId,
-          savedAt: new Date().toISOString(),
-          outreachStatus: 'not_contacted'
-        });
-        added++;
-      }
-    }
-    writeDb(db);
-    const total = db.filter(c => c.userId === userId).length;
-    return { added, total };
-  });
-  res.json({ ok: true, added, total });
+  const rows = churches
+    .filter(c => c && typeof c.name === 'string')
+    .map(c => ({
+      ...pickAllowed(c),
+      userId,
+      name: c.name.trim(),
+      city: (c.city || '').trim(),
+      savedAt: new Date().toISOString(),
+      outreachStatus: 'not_contacted'
+    }));
+
+  const { data, error } = await supabaseAdmin
+    .from('churches')
+    .upsert(rows, { onConflict: 'userId,name,city', ignoreDuplicates: true })
+    .select();
+  if (error) return res.status(500).json({ error: 'Failed to save churches.' });
+
+  const { count } = await supabaseAdmin
+    .from('churches')
+    .select('*', { count: 'exact', head: true })
+    .eq('userId', userId);
+  res.json({ ok: true, added: (data || []).length, total: count || 0 });
 });
 
 // ─── PATCH /api/db/churches/:id ───────────────────────────────────────────────
@@ -226,34 +203,30 @@ app.patch('/api/db/churches/:id', async (req, res) => {
   }
 
   const userId = req.user.sub;
-  // Fix 2 + 3: verify ownership and serialize write
-  const result = await withDbLock(() => {
-    const db = readDb();
-    const idx = db.findIndex(c => c.id === id);
-    if (idx === -1) return { status: 404, body: { error: 'Church not found.' } };
-    if (db[idx].userId !== userId) return { status: 403, body: { error: 'Forbidden.' } };
-    db[idx].outreachStatus = outreachStatus;
-    writeDb(db);
-    return { status: 200, body: { ok: true } };
-  });
-  res.status(result.status).json(result.body);
+  const { data, error } = await supabaseAdmin
+    .from('churches')
+    .update({ outreachStatus })
+    .eq('id', id)
+    .eq('userId', userId)
+    .select();
+  if (error) return res.status(500).json({ error: 'Failed to update church.' });
+  if (!data || data.length === 0) return res.status(404).json({ error: 'Church not found.' });
+  res.json({ ok: true });
 });
 
 // ─── DELETE /api/db/churches/:id ─────────────────────────────────────────────
 app.delete('/api/db/churches/:id', async (req, res) => {
   const { id } = req.params;
   const userId = req.user.sub;
-  // Fix 2 + 3: verify ownership and serialize write
-  const result = await withDbLock(() => {
-    const db = readDb();
-    const idx = db.findIndex(c => c.id === id);
-    if (idx === -1) return { status: 404, body: { error: 'Church not found.' } };
-    if (db[idx].userId !== userId) return { status: 403, body: { error: 'Forbidden.' } };
-    db.splice(idx, 1);
-    writeDb(db);
-    return { status: 200, body: { ok: true } };
-  });
-  res.status(result.status).json(result.body);
+  const { data, error } = await supabaseAdmin
+    .from('churches')
+    .delete()
+    .eq('id', id)
+    .eq('userId', userId)
+    .select();
+  if (error) return res.status(500).json({ error: 'Failed to delete church.' });
+  if (!data || data.length === 0) return res.status(404).json({ error: 'Church not found.' });
+  res.json({ ok: true });
 });
 
 // ─── POST /api/search-leads ───────────────────────────────────────────────────
@@ -918,16 +891,11 @@ Return:
 });
 
 
-// ─── Static frontend (production) ────────────────────────────────────────────
-const DIST = path.join(__dirname, 'dist');
-if (fs.existsSync(DIST)) {
-  app.use(express.static(DIST));
-  app.get('*', (req, res) => {
-    res.sendFile(path.join(DIST, 'index.html'));
+// ─── Start (local dev only — Vercel handles listening in production) ──────────
+if (!process.env.VERCEL) {
+  app.listen(PORT, () => {
+    console.log(`[server] Proxy server listening on http://localhost:${PORT}`);
   });
 }
 
-// ─── Start ────────────────────────────────────────────────────────────────────
-app.listen(PORT, () => {
-  console.log(`[server] Proxy server listening on http://localhost:${PORT}`);
-});
+export default app;
