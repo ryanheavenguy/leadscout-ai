@@ -4,6 +4,7 @@ import react from '@vitejs/plugin-react';
 export default defineConfig({
   plugins: [react()],
   server: {
+    port: 3000,
     proxy: {
       '/api': {
         target: 'http://localhost:3001',
@@ -27,7 +28,7 @@ export default defineConfig({
       // unsafe-inline on script-src is required by Vite HMR in dev mode only.
       // Production builds served by Express use helmet with no unsafe-inline.
       // unsafe-inline on style-src covers React dynamic inline styles (e.g. progress bar width).
-      'Content-Security-Policy': "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws://localhost:5173; img-src 'self' data:;"
+      'Content-Security-Policy': "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'self' ws://localhost:5173 https://*.supabase.co; img-src 'self' data:;"
     }
   }
 });

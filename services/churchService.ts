@@ -103,8 +103,8 @@ export class ChurchService {
       });
 
       if (!response.ok) {
-        const err = await response.json().catch(() => ({ message: response.statusText }));
-        throw new Error(err.message || `HTTP ${response.status}`);
+        const err = await response.json().catch(() => ({ error: response.statusText }));
+        throw new Error(err.error || err.message || `HTTP ${response.status}`);
       }
 
       const { churches: raw, sources } = await response.json();
@@ -125,8 +125,8 @@ export class ChurchService {
       });
 
       if (!response.ok) {
-        const err = await response.json().catch(() => ({ message: response.statusText }));
-        throw new Error(err.message || `HTTP ${response.status}`);
+        const err = await response.json().catch(() => ({ error: response.statusText }));
+        throw new Error(err.error || err.message || `HTTP ${response.status}`);
       }
 
       return response.json() as Promise<ChurchResearch>;
@@ -146,7 +146,10 @@ export class ChurchService {
 
   async getSavedChurches(): Promise<Church[]> {
     const response = await this.authedFetch('/api/db/churches');
-    if (!response.ok) throw new Error('Failed to load database.');
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({ error: response.statusText }));
+      throw new Error(err.error || `HTTP ${response.status}`);
+    }
     return response.json();
   }
 
@@ -194,8 +197,8 @@ export class ChurchService {
     });
 
     if (!response.ok) {
-      const err = await response.json().catch(() => ({ message: response.statusText }));
-      throw new Error(err.message || `HTTP ${response.status}`);
+      const err = await response.json().catch(() => ({ error: response.statusText }));
+      throw new Error(err.error || err.message || `HTTP ${response.status}`);
     }
 
     if (onProgress) onProgress(60);
@@ -211,12 +214,30 @@ export class ChurchService {
     });
 
     if (!response.ok) {
-      const err = await response.json().catch(() => ({ message: response.statusText }));
-      throw new Error(err.message || `HTTP ${response.status}`);
+      const err = await response.json().catch(() => ({ error: response.statusText }));
+      throw new Error(err.error || err.message || `HTTP ${response.status}`);
     }
 
     const { summaries } = await response.json();
     return summaries || {};
+  }
+
+  async enrichChurchesFromPlaces(
+    churches: Church[]
+  ): Promise<Record<string, { pastor: string | null; facebook: string | null; instagram: string | null; youtube: string | null; description: string }>> {
+    const response = await this.authedFetch('/api/enrich-churches-from-places', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ churches })
+    });
+
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({ error: response.statusText }));
+      throw new Error(err.error || err.message || `HTTP ${response.status}`);
+    }
+
+    const { enrichments } = await response.json();
+    return enrichments || {};
   }
 
   async summarizeBatch(

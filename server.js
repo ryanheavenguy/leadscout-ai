@@ -35,7 +35,7 @@ function pickAllowed(church) {
 const app = express();
 app.set('trust proxy', 1); // Fix 7: correct client IP behind reverse proxy
 const PORT = process.env.PORT || 3001;
-const MODEL_NAME = 'gemini-2.0-flash';
+const MODEL_NAME = 'gemini-2.5-flash';
 
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
 
@@ -55,6 +55,7 @@ app.use(helmet({
 
 // ─── CORS ─────────────────────────────────────────────────────────────────────
 const ALLOWED_ORIGINS = [
+  'http://localhost:3000',
   'http://localhost:5173',
   'http://localhost:4173',
   'https://db.theheavenguy.org',
@@ -123,6 +124,31 @@ async function callWithRetry(fn, maxRetries = 3) {
   throw lastError;
 }
 
+// ─── Robust JSON extraction ───────────────────────────────────────────────────
+// Grounded Gemini calls (Google Search) cannot also set responseMimeType/responseSchema,
+// so those endpoints get JSON as free text — often wrapped in ```json fences or with
+// stray prose. Strip fences, then fall back to slicing the first JSON array/object.
+function parseJsonResponse(text, fallback) {
+  if (!text) return fallback;
+  let cleaned = String(text).trim();
+  const fenceMatch = cleaned.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  if (fenceMatch) cleaned = fenceMatch[1].trim();
+  try {
+    return JSON.parse(cleaned);
+  } catch {
+    const start = cleaned.search(/[[{]/);
+    const end = Math.max(cleaned.lastIndexOf(']'), cleaned.lastIndexOf('}'));
+    if (start !== -1 && end > start) {
+      try {
+        return JSON.parse(cleaned.slice(start, end + 1));
+      } catch {
+        return fallback;
+      }
+    }
+    return fallback;
+  }
+}
+
 // ─── Auth middleware ──────────────────────────────────────────────────────────
 async function requireAuth(req, res, next) {
   const token = req.headers.authorization?.split(' ')[1];
@@ -147,13 +173,20 @@ app.use('/api', requireAuth);
 
 // ─── GET /api/db/churches ─────────────────────────────────────────────────────
 app.get('/api/db/churches', async (req, res) => {
-  const userId = req.user.sub;
-  const { data, error } = await supabaseAdmin
-    .from('churches')
-    .select('*')
-    .eq('userId', userId);
-  if (error) return res.status(500).json({ error: 'Failed to load churches.' });
-  res.json(data);
+  try {
+    const userId = req.user.sub;
+    console.log('[/api/db/churches] userId:', userId);
+    const { data, error } = await supabaseAdmin
+      .from('churches')
+      .select('*')
+      .eq('userId', userId);
+    console.log('[/api/db/churches] data length:', data?.length, 'error:', error);
+    if (error) return res.status(500).json({ error: error.message || 'Failed to load churches.' });
+    res.json(data);
+  } catch (err) {
+    console.error('[/api/db/churches] CAUGHT:', err);
+    res.status(500).json({ error: err.message || 'Unexpected server error' });
+  }
 });
 
 // ─── GET /api/db/church-names ─────────────────────────────────────────────────
@@ -288,45 +321,20 @@ app.post('/api/search-leads', async (req, res) => {
       - confidenceScore (0-100), leadScore (0-100)
       - sourceEvidence (where you found this)
 
-      Constraint: Return ONLY valid JSON as a flat array of objects. Avoid all hallucinations.`;
+      Constraint: Return ONLY a raw JSON array of objects — no markdown, no code fences, no prose. Avoid all hallucinations.`;
 
+      // NOTE: Google Search grounding and responseMimeType/responseSchema are mutually
+      // exclusive in the Gemini API, so JSON shape is enforced via the prompt and parsed
+      // from text instead of via responseSchema.
       const response = await ai.models.generateContent({
         model: MODEL_NAME,
         contents: prompt,
         config: {
-          tools: [{ googleSearch: {} }],
-          responseMimeType: 'application/json',
-          responseSchema: {
-            type: Type.ARRAY,
-            items: {
-              type: Type.OBJECT,
-              properties: {
-                companyName: { type: Type.STRING },
-                website: { type: Type.STRING },
-                address: { type: Type.STRING, nullable: true },
-                description: { type: Type.STRING },
-                contactName: { type: Type.STRING, nullable: true },
-                contactTitle: { type: Type.STRING, nullable: true },
-                contactEmail: { type: Type.STRING, nullable: true },
-                contactPhone: { type: Type.STRING, nullable: true },
-                linkedin: { type: Type.STRING, nullable: true },
-                linkedinCompanyPage: { type: Type.STRING, nullable: true },
-                twitter: { type: Type.STRING, nullable: true },
-                facebook: { type: Type.STRING, nullable: true },
-                instagram: { type: Type.STRING, nullable: true },
-                tiktok: { type: Type.STRING, nullable: true },
-                confidenceScore: { type: Type.NUMBER },
-                leadScore: { type: Type.NUMBER },
-                sourceEvidence: { type: Type.STRING }
-              },
-              required: ['companyName', 'website', 'description', 'confidenceScore', 'leadScore']
-            }
-          }
+          tools: [{ googleSearch: {} }]
         }
       });
 
-      const responseText = response.text || '[]';
-      const parsed = JSON.parse(responseText);
+      const parsed = parseJsonResponse(response.text, []);
       const leads = (Array.isArray(parsed) ? parsed : []).map((l, index) => ({
         ...l,
         id: `lead-${Date.now()}-${index}-${Math.random().toString(36).substr(2, 5)}`,
@@ -372,33 +380,19 @@ app.post('/api/research', async (req, res) => {
       4. Confirm the precise professional title for the primary contact.
       5. Evaluate the 'freshness' of the data found (last 6-12 months).
 
-      Output JSON: summary, keyContacts (array), recentNews (array), valueProposition, verifiedOwnerName, verifiedOwnerTitle, verifiedEmail, verifiedPhone, accuracyCheck (brief assessment of data freshness).`;
+      Output ONLY a raw JSON object — no markdown, no code fences, no prose — with these keys: summary, keyContacts (array of strings), recentNews (array of strings), valueProposition, verifiedOwnerName, verifiedOwnerTitle, verifiedEmail, verifiedPhone, accuracyCheck (brief assessment of data freshness).`;
 
+      // Google Search grounding can't be combined with responseMimeType/responseSchema;
+      // JSON shape is enforced via the prompt and parsed from text.
       const response = await ai.models.generateContent({
         model: MODEL_NAME,
         contents: prompt,
         config: {
-          tools: [{ googleSearch: {} }],
-          responseMimeType: 'application/json',
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              summary: { type: Type.STRING },
-              keyContacts: { type: Type.ARRAY, items: { type: Type.STRING } },
-              recentNews: { type: Type.ARRAY, items: { type: Type.STRING } },
-              valueProposition: { type: Type.STRING },
-              verifiedOwnerName: { type: Type.STRING },
-              verifiedOwnerTitle: { type: Type.STRING },
-              verifiedEmail: { type: Type.STRING },
-              verifiedPhone: { type: Type.STRING },
-              accuracyCheck: { type: Type.STRING }
-            },
-            required: ['summary', 'keyContacts', 'recentNews', 'valueProposition', 'verifiedOwnerName', 'verifiedOwnerTitle', 'verifiedEmail', 'verifiedPhone', 'accuracyCheck']
-          }
+          tools: [{ googleSearch: {} }]
         }
       });
 
-      return JSON.parse(response.text || '{}');
+      return parseJsonResponse(response.text, {});
     });
 
     res.json(result);
@@ -476,9 +470,7 @@ app.post('/api/search-churches', async (req, res) => {
   try {
     let { country, location, includeChurches, includeMinistries, keywords, quantity, excludeList, batchSize } = req.body;
 
-    if (!location) {
-      return res.status(400).json({ error: 'location is required.' });
-    }
+    location = location || '';
     quantity = Number(quantity);
     batchSize = Number(batchSize);
     if (!Number.isInteger(quantity) || quantity < 1 || quantity > 200) {
@@ -576,43 +568,20 @@ Instructions:
 Return exactly ${batchSize} objects as a JSON array.`;
       }
 
+      // Each object must use these exact keys: name, organizationType, address, city,
+      // website, phone, email, pastor, founded, congregationSize, serviceTimes,
+      // description, facebook, instagram, youtube, confidenceScore, sourceEvidence.
+      // Google Search grounding can't be combined with responseMimeType/responseSchema,
+      // so JSON shape is enforced via the prompt and parsed from text.
       const response = await ai.models.generateContent({
         model: MODEL_NAME,
-        contents: prompt,
+        contents: prompt + '\n\nReturn ONLY a raw JSON array — no markdown, no code fences, no prose. Each object must use these exact keys: name, organizationType, address, city, website, phone, email, pastor, founded, congregationSize, serviceTimes, description, facebook, instagram, youtube, confidenceScore, sourceEvidence.',
         config: {
-          tools: [{ googleSearch: {} }],
-          responseMimeType: 'application/json',
-          responseSchema: {
-            type: Type.ARRAY,
-            items: {
-              type: Type.OBJECT,
-              properties: {
-                name:             { type: Type.STRING },
-                organizationType: { type: Type.STRING },
-                address:          { type: Type.STRING },
-                city:             { type: Type.STRING },
-                website:          { type: Type.STRING, nullable: true },
-                phone:            { type: Type.STRING, nullable: true },
-                email:            { type: Type.STRING, nullable: true },
-                pastor:           { type: Type.STRING, nullable: true },
-                founded:          { type: Type.STRING, nullable: true },
-                congregationSize: { type: Type.STRING, nullable: true },
-                serviceTimes:     { type: Type.STRING, nullable: true },
-                description:      { type: Type.STRING },
-                facebook:         { type: Type.STRING, nullable: true },
-                instagram:        { type: Type.STRING, nullable: true },
-                youtube:          { type: Type.STRING, nullable: true },
-                confidenceScore:  { type: Type.NUMBER },
-                sourceEvidence:   { type: Type.STRING, nullable: true }
-              },
-              required: ['name', 'organizationType', 'address', 'description', 'confidenceScore']
-            }
-          }
+          tools: [{ googleSearch: {} }]
         }
       });
 
-      const responseText = response.text || '[]';
-      const parsed = JSON.parse(responseText);
+      const parsed = parseJsonResponse(response.text, []);
       const churches = (Array.isArray(parsed) ? parsed : []).map((c, index) => ({
         ...c,
         id: `church-${Date.now()}-${index}-${Math.random().toString(36).substr(2, 5)}`,
@@ -662,31 +631,21 @@ Find and return:
 6. missionStatement — The church's stated mission or vision if found on their site.
 7. contactVerification — Brief note on how current the information appears (when you found it, how recently the site was updated, etc.).
 
-Only report verified information. Do not invent details.`;
+Only report verified information. Do not invent details.
 
+Return ONLY a raw JSON object — no markdown, no code fences, no prose — with these exact keys: summary (string), history (string), ministries (array of strings), leadership (array of strings), recentNews (array of strings), missionStatement (string), contactVerification (string).`;
+
+      // Google Search grounding can't be combined with responseMimeType/responseSchema;
+      // JSON shape is enforced via the prompt and parsed from text.
       const response = await ai.models.generateContent({
         model: MODEL_NAME,
         contents: prompt,
         config: {
-          tools: [{ googleSearch: {} }],
-          responseMimeType: 'application/json',
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              summary:             { type: Type.STRING },
-              history:             { type: Type.STRING },
-              ministries:          { type: Type.ARRAY, items: { type: Type.STRING } },
-              leadership:          { type: Type.ARRAY, items: { type: Type.STRING } },
-              recentNews:          { type: Type.ARRAY, items: { type: Type.STRING } },
-              missionStatement:    { type: Type.STRING },
-              contactVerification: { type: Type.STRING }
-            },
-            required: ['summary', 'history', 'ministries', 'leadership', 'recentNews', 'missionStatement', 'contactVerification']
-          }
+          tools: [{ googleSearch: {} }]
         }
       });
 
-      return JSON.parse(response.text || '{}');
+      return parseJsonResponse(response.text, {});
     });
 
     res.json(result);
@@ -703,9 +662,7 @@ app.post('/api/search-churches-places', async (req, res) => {
   try {
     let { location, includeChurches, includeMinistries, quantity } = req.body;
 
-    if (!location) {
-      return res.status(400).json({ error: 'location is required.' });
-    }
+    location = location || '';
 
     const PLACES_KEY = process.env.GOOGLE_PLACES_API_KEY;
     if (!PLACES_KEY) {
@@ -842,6 +799,85 @@ ${churchList}`;
   }
 });
 
+// ─── POST /api/enrich-churches-from-places ────────────────────────────────────
+// Google Places returns no pastor/socials, so enrich verified Places results with a
+// GROUNDED Gemini pass (Google Search) that looks up the lead pastor, social URLs, and a
+// real description per church. Batched in chunks of 10 to keep grounding calls reasonable.
+app.post('/api/enrich-churches-from-places', async (req, res) => {
+  try {
+    const { churches } = req.body;
+
+    if (!Array.isArray(churches) || churches.length === 0) {
+      return res.status(400).json({ error: 'churches must be a non-empty array.' });
+    }
+    if (churches.length > 60) {
+      return res.status(400).json({ error: 'Maximum 60 churches per batch.' });
+    }
+
+    const CHUNK_SIZE = 10;
+    const enrichments = {};
+
+    for (let offset = 0; offset < churches.length; offset += CHUNK_SIZE) {
+      const chunk = churches.slice(offset, offset + CHUNK_SIZE);
+
+      const churchList = chunk.map((c, i) => {
+        const name = sanitize(c.name || '');
+        const address = c.address ? sanitize(c.address) : '';
+        const website = c.website ? sanitize(c.website) : '';
+        return `${i + 1}. "${name}"${address ? `, ${address}` : ''}${website ? ` (${website})` : ''}`;
+      }).join('\n');
+
+      const prompt = `For each organization listed below, use Google Search to find publicly available details. Prefer the organization's own website (look at staff/leadership/about pages) and official social media accounts.
+
+Organizations:
+${churchList}
+
+For each one, find:
+1. pastor — the lead/senior pastor or primary leader's full name, if publicly listed.
+2. facebook — the official Facebook page URL.
+3. instagram — the official Instagram profile URL.
+4. youtube — the official YouTube channel URL.
+5. description — a concise 2-sentence description of its identity, tradition, and community role.
+
+Rules:
+- Use null for any field you cannot verify. NEVER invent or guess names or URLs.
+- Only return social URLs that clearly belong to this specific organization.
+
+Return ONLY a raw JSON array — no markdown, no code fences, no prose — with one object per organization in the SAME ORDER as the list. Each object must use exactly these keys: pastor, facebook, instagram, youtube, description.`;
+
+      // Google Search grounding can't be combined with responseMimeType/responseSchema,
+      // so JSON shape is enforced via the prompt and parsed from text.
+      const parsed = await callWithRetry(async () => {
+        const response = await ai.models.generateContent({
+          model: MODEL_NAME,
+          contents: prompt,
+          config: {
+            tools: [{ googleSearch: {} }]
+          }
+        });
+        return parseJsonResponse(response.text, []);
+      });
+
+      const arr = Array.isArray(parsed) ? parsed : [];
+      chunk.forEach((c, i) => {
+        const e = arr[i] || {};
+        enrichments[c.id] = {
+          pastor: e.pastor || null,
+          facebook: e.facebook || null,
+          instagram: e.instagram || null,
+          youtube: e.youtube || null,
+          description: e.description || ''
+        };
+      });
+    }
+
+    res.json({ enrichments });
+  } catch (err) {
+    console.error('[/api/enrich-churches-from-places]', err);
+    res.status(500).json({ error: 'An internal error occurred.' });
+  }
+});
+
 // ─── POST /api/batch-summarize-churches ───────────────────────────────────────
 app.post('/api/batch-summarize-churches', async (req, res) => {
   try {
@@ -902,6 +938,16 @@ Return:
   }
 });
 
+
+// ─── Global JSON error handler (must be last) ────────────────────────────────
+// Express 4 default error handler sends text/plain; override so all 4xx/5xx
+// errors reach the client as parseable JSON instead of "Internal Server Error".
+app.use((err, req, res, next) => {
+  if (res.headersSent) return next(err);
+  console.error('[express]', err);
+  const status = typeof err.status === 'number' ? err.status : 500;
+  res.status(status).json({ error: err.message || 'An internal error occurred.' });
+});
 
 // ─── Start (local dev only — Vercel handles listening in production) ──────────
 if (!process.env.VERCEL) {

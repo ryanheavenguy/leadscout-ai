@@ -7,6 +7,7 @@ export interface Church {
   organizationType?: string;
   address: string;
   city: string;
+  country?: string;
   website?: string;
   phone?: string;
   email?: string;

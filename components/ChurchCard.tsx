@@ -81,6 +81,9 @@ const ChurchCard: React.FC<ChurchCardProps> = ({
               </span>
             )}
           </div>
+          {church.city && (
+            <span className="text-[10px] text-slate-400 truncate max-w-[170px]">{church.city}</span>
+          )}
         </div>
       </td>
 
