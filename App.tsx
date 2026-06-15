@@ -1,5 +1,5 @@
 
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { Session } from '@supabase/supabase-js';
 import { Church, ChurchSearchParams, ChurchResearch, BatchChurchResearch, AppStatus, ViewMode } from './types';
 import { supabase, isSupabaseConfigured } from './lib/supabase';
@@ -80,6 +80,48 @@ const App: React.FC = () => {
   const [error, setError]                 = useState<string | null>(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [saveStatus, setSaveStatus]       = useState<string | null>(null);
+
+  // ─── Resizable table columns ────────────────────────────────────────────────
+  const COLUMN_DEFS = useMemo(() => ([
+    { key: 'church',      label: 'Church',             width: 260, sticky: true },
+    { key: 'address',     label: 'Address / Services', width: 380 },
+    { key: 'pastor',      label: 'Pastor',             width: 220 },
+    { key: 'phone',       label: 'Phone',              width: 160 },
+    { key: 'website',     label: 'Website',            width: 240 },
+    { key: 'socials',     label: 'Socials',            width: 110 },
+    { key: 'description', label: 'Description',         width: 460 },
+    { key: 'inspect',     label: 'Inspect',            width: 80, center: true },
+  ]), []);
+  const [colWidths, setColWidths] = useState<number[]>(() => COLUMN_DEFS.map(c => c.width));
+  const resizeRef = useRef<{ index: number; startX: number; startWidth: number } | null>(null);
+
+  const startResize = (index: number) => (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    resizeRef.current = { index, startX: e.clientX, startWidth: colWidths[index] };
+
+    const onMove = (ev: MouseEvent) => {
+      const ctx = resizeRef.current;
+      if (!ctx) return;
+      const next = Math.max(60, ctx.startWidth + (ev.clientX - ctx.startX));
+      setColWidths(prev => {
+        const copy = [...prev];
+        copy[ctx.index] = next;
+        return copy;
+      });
+    };
+    const onUp = () => {
+      resizeRef.current = null;
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  };
 
   const initialForm: ChurchSearchParams = {
     country: 'US',
@@ -293,7 +335,7 @@ const App: React.FC = () => {
     );
   }
 
-  if (!isSupabaseConfigured) {
+  if (!import.meta.env.DEV && !isSupabaseConfigured) {
     return (
       <div className="fixed inset-0 bg-slate-900 flex items-center justify-center p-8">
         <div className="bg-white/10 border border-white/20 rounded-2xl p-8 max-w-lg w-full text-center space-y-4">
@@ -309,7 +351,7 @@ const App: React.FC = () => {
     );
   }
 
-  if (!session || isRecovery) {
+  if (isSupabaseConfigured && (!session || isRecovery)) {
     return <Login isRecovery={isRecovery} onRecoveryComplete={() => setIsRecovery(false)} />;
   }
 
@@ -658,20 +700,29 @@ const App: React.FC = () => {
                 </div>
               ) : churches.length > 0 ? (
                 <div className="flex-1 min-h-0 overflow-x-auto overflow-y-auto bg-slate-50">
-                  <table className="w-full text-left border-collapse table-fixed min-w-[1900px]">
+                  <table className="text-left border-collapse table-fixed" style={{ width: 50 + colWidths.reduce((a, b) => a + b, 0) }}>
+                    <colgroup>
+                      <col style={{ width: 50 }} />
+                      {colWidths.map((w, i) => <col key={i} style={{ width: w }} />)}
+                    </colgroup>
                     <thead className="sticky top-0 z-40 bg-slate-200 border-b border-slate-400">
                       <tr>
-                        <th className="sticky left-0 z-50 px-4 py-2 bg-slate-200 border-r border-slate-300 w-[50px] text-center shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]">
+                        <th className="sticky left-0 z-50 px-4 py-2 bg-slate-200 border-r border-slate-300 text-center shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]">
                           <input type="checkbox" checked={isAllSelected} onChange={toggleAll} className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer" />
                         </th>
-                        <th className="sticky left-[50px] z-50 px-4 py-2 bg-slate-200 text-xs font-bold text-slate-700 uppercase border-r border-slate-400 w-[260px] shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]">Church</th>
-                        <th className="px-4 py-2 text-xs font-bold text-slate-700 uppercase border-r border-slate-300 w-[380px]">Address / Services</th>
-                        <th className="px-4 py-2 text-xs font-bold text-slate-700 uppercase border-r border-slate-300 w-[220px]">Pastor</th>
-                        <th className="px-4 py-2 text-xs font-bold text-slate-700 uppercase border-r border-slate-300 w-[160px]">Phone</th>
-                        <th className="px-4 py-2 text-xs font-bold text-slate-700 uppercase border-r border-slate-300 w-[240px]">Website</th>
-                        <th className="px-4 py-2 text-xs font-bold text-slate-700 uppercase border-r border-slate-300 w-[110px]">Socials</th>
-                        <th className="px-4 py-2 text-xs font-bold text-slate-700 uppercase border-r border-slate-300 w-[460px]">Description</th>
-                        <th className="px-4 py-2 text-center text-xs font-bold text-slate-700 uppercase w-[80px]">Inspect</th>
+                        {COLUMN_DEFS.map((col, i) => (
+                          <th
+                            key={col.key}
+                            className={`relative px-4 py-2 text-xs font-bold text-slate-700 uppercase ${i < COLUMN_DEFS.length - 1 ? 'border-r' : ''} ${col.center ? 'text-center' : ''} ${col.sticky ? 'sticky left-[50px] z-50 bg-slate-200 border-slate-400 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]' : 'border-slate-300'}`}
+                          >
+                            {col.label}
+                            <div
+                              onMouseDown={startResize(i)}
+                              className="absolute top-0 right-0 h-full w-1.5 cursor-col-resize select-none hover:bg-blue-400/60 active:bg-blue-500"
+                              title="Drag to resize"
+                            />
+                          </th>
+                        ))}
                       </tr>
                     </thead>
                     <tbody>

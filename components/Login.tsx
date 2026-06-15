@@ -74,20 +74,20 @@ const Login: React.FC<LoginProps> = ({ isRecovery = false, onRecoveryComplete })
               ✝
             </div>
             <h1 className="text-3xl font-black text-white tracking-tighter">The Heaven Guy</h1>
-            <p className="text-slate-400 font-medium text-sm uppercase tracking-widest">Church Database</p>
+            <p className="text-slate-300 font-medium text-sm uppercase tracking-widest">Church Database</p>
           </div>
 
           {/* ── Login ── */}
           {view === 'login' && (
             <form onSubmit={handleLogin} className="space-y-6">
               <div className="space-y-1">
-                <label className="text-[10px] font-black text-slate-300 uppercase tracking-widest ml-1">Email</label>
+                <label className="text-xs font-black text-slate-200 uppercase tracking-widest ml-1">Email</label>
                 <input
                   type="email"
                   value={email}
                   onChange={e => setEmail(e.target.value)}
                   autoComplete="email"
-                  className="w-full bg-slate-800/50 border border-slate-700 text-black px-4 py-3 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all placeholder:text-slate-600"
+                  className="w-full bg-slate-800/50 border border-slate-700 text-white px-4 py-3 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all placeholder:text-slate-400"
                   placeholder="you@example.com"
                   required
                   disabled={loading}
@@ -95,13 +95,13 @@ const Login: React.FC<LoginProps> = ({ isRecovery = false, onRecoveryComplete })
               </div>
 
               <div className="space-y-1">
-                <label className="text-[10px] font-black text-slate-300 uppercase tracking-widest ml-1">Password</label>
+                <label className="text-xs font-black text-slate-200 uppercase tracking-widest ml-1">Password</label>
                 <input
                   type="password"
                   value={password}
                   onChange={e => setPassword(e.target.value)}
                   autoComplete="current-password"
-                  className="w-full bg-slate-800/50 border border-slate-700 text-black px-4 py-3 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all placeholder:text-slate-600"
+                  className="w-full bg-slate-800/50 border border-slate-700 text-white px-4 py-3 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all placeholder:text-slate-400"
                   placeholder="••••••••••••"
                   required
                   disabled={loading}
@@ -136,13 +136,13 @@ const Login: React.FC<LoginProps> = ({ isRecovery = false, onRecoveryComplete })
               </p>
 
               <div className="space-y-1">
-                <label className="text-[10px] font-black text-slate-300 uppercase tracking-widest ml-1">Email</label>
+                <label className="text-xs font-black text-slate-200 uppercase tracking-widest ml-1">Email</label>
                 <input
                   type="email"
                   value={email}
                   onChange={e => setEmail(e.target.value)}
                   autoComplete="email"
-                  className="w-full bg-slate-800/50 border border-slate-700 text-black px-4 py-3 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all placeholder:text-slate-600"
+                  className="w-full bg-slate-800/50 border border-slate-700 text-white px-4 py-3 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all placeholder:text-slate-400"
                   placeholder="you@example.com"
                   required
                   disabled={loading || !!message}
@@ -180,13 +180,13 @@ const Login: React.FC<LoginProps> = ({ isRecovery = false, onRecoveryComplete })
               </p>
 
               <div className="space-y-1">
-                <label className="text-[10px] font-black text-slate-300 uppercase tracking-widest ml-1">New Password</label>
+                <label className="text-xs font-black text-slate-200 uppercase tracking-widest ml-1">New Password</label>
                 <input
                   type="password"
                   value={password}
                   onChange={e => setPassword(e.target.value)}
                   autoComplete="new-password"
-                  className="w-full bg-slate-800/50 border border-slate-700 text-black px-4 py-3 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all placeholder:text-slate-600"
+                  className="w-full bg-slate-800/50 border border-slate-700 text-white px-4 py-3 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all placeholder:text-slate-400"
                   placeholder="••••••••••••"
                   required
                   disabled={loading}
@@ -194,13 +194,13 @@ const Login: React.FC<LoginProps> = ({ isRecovery = false, onRecoveryComplete })
               </div>
 
               <div className="space-y-1">
-                <label className="text-[10px] font-black text-slate-300 uppercase tracking-widest ml-1">Confirm Password</label>
+                <label className="text-xs font-black text-slate-200 uppercase tracking-widest ml-1">Confirm Password</label>
                 <input
                   type="password"
                   value={confirmPassword}
                   onChange={e => setConfirmPassword(e.target.value)}
                   autoComplete="new-password"
-                  className="w-full bg-slate-800/50 border border-slate-700 text-black px-4 py-3 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all placeholder:text-slate-600"
+                  className="w-full bg-slate-800/50 border border-slate-700 text-white px-4 py-3 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all placeholder:text-slate-400"
                   placeholder="••••••••••••"
                   required
                   disabled={loading}

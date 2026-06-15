@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Church, OutreachStatus } from '../types';
 import { churchService } from '../services/churchService';
 import { COUNTRIES } from '../constants/countries';
@@ -38,6 +38,52 @@ const DatabasePage: React.FC<Props> = ({ onBack }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  // ─── Resizable table columns ────────────────────────────────────────────────
+  const COLUMN_DEFS = useMemo(() => ([
+    { key: 'name',        label: 'Name / Type',     width: 220, sticky: true },
+    { key: 'address',     label: 'Address',         width: 200 },
+    { key: 'city',        label: 'City',            width: 130 },
+    { key: 'country',     label: 'Country',         width: 120 },
+    { key: 'pastor',      label: 'Pastor',          width: 150 },
+    { key: 'phone',       label: 'Phone',           width: 140 },
+    { key: 'website',     label: 'Website',         width: 160 },
+    { key: 'socials',     label: 'Socials',         width: 100 },
+    { key: 'description', label: 'Description',     width: 260 },
+    { key: 'saved',       label: 'Saved',           width: 90 },
+    { key: 'status',      label: 'Outreach Status', width: 170 },
+    { key: 'del',         label: 'Del',             width: 60, center: true },
+  ]), []);
+  const [colWidths, setColWidths] = useState<number[]>(() => COLUMN_DEFS.map(c => c.width));
+  const resizeRef = useRef<{ index: number; startX: number; startWidth: number } | null>(null);
+
+  const startResize = (index: number) => (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    resizeRef.current = { index, startX: e.clientX, startWidth: colWidths[index] };
+
+    const onMove = (ev: MouseEvent) => {
+      const ctx = resizeRef.current;
+      if (!ctx) return;
+      const next = Math.max(60, ctx.startWidth + (ev.clientX - ctx.startX));
+      setColWidths(prev => {
+        const copy = [...prev];
+        copy[ctx.index] = next;
+        return copy;
+      });
+    };
+    const onUp = () => {
+      resizeRef.current = null;
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  };
 
   useEffect(() => {
     load();
@@ -240,21 +286,25 @@ const DatabasePage: React.FC<Props> = ({ onBack }) => {
             </p>
           </div>
         ) : (
-          <table className="w-full text-left border-collapse" style={{ minWidth: '1400px' }}>
+          <table className="text-left border-collapse table-fixed" style={{ width: colWidths.reduce((a, b) => a + b, 0) }}>
+            <colgroup>
+              {colWidths.map((w, i) => <col key={i} style={{ width: w }} />)}
+            </colgroup>
             <thead className="sticky top-0 z-10 bg-slate-200 border-b border-slate-400">
               <tr>
-                <th className="sticky left-0 z-20 bg-slate-200 px-4 py-1 text-xs font-bold text-slate-700 uppercase border-r border-slate-300 w-[220px]">Name / Type</th>
-                <th className="px-4 py-1 text-xs font-bold text-slate-700 uppercase border-r border-slate-300 w-[200px]">Address</th>
-                <th className="px-4 py-1 text-xs font-bold text-slate-700 uppercase border-r border-slate-300 w-[130px]">City</th>
-                <th className="px-4 py-1 text-xs font-bold text-slate-700 uppercase border-r border-slate-300 w-[120px]">Country</th>
-                <th className="px-4 py-1 text-xs font-bold text-slate-700 uppercase border-r border-slate-300 w-[150px]">Pastor</th>
-                <th className="px-4 py-1 text-xs font-bold text-slate-700 uppercase border-r border-slate-300 w-[140px]">Phone</th>
-                <th className="px-4 py-1 text-xs font-bold text-slate-700 uppercase border-r border-slate-300 w-[160px]">Website</th>
-                <th className="px-4 py-1 text-xs font-bold text-slate-700 uppercase border-r border-slate-300 w-[100px]">Socials</th>
-                <th className="px-4 py-1 text-xs font-bold text-slate-700 uppercase border-r border-slate-300 w-[260px]">Description</th>
-                <th className="px-4 py-1 text-xs font-bold text-slate-700 uppercase border-r border-slate-300 w-[90px]">Saved</th>
-                <th className="px-4 py-1 text-xs font-bold text-slate-700 uppercase border-r border-slate-300 w-[170px]">Outreach Status</th>
-                <th className="px-4 py-1 text-xs font-bold text-slate-700 uppercase w-[60px] text-center">Del</th>
+                {COLUMN_DEFS.map((col, i) => (
+                  <th
+                    key={col.key}
+                    className={`relative px-4 py-0.5 text-xs font-bold text-slate-700 uppercase ${i < COLUMN_DEFS.length - 1 ? 'border-r' : ''} ${col.center ? 'text-center' : ''} ${col.sticky ? 'sticky left-0 z-20 bg-slate-200 border-slate-300' : 'border-slate-300'}`}
+                  >
+                    {col.label}
+                    <div
+                      onMouseDown={startResize(i)}
+                      className="absolute top-0 right-0 h-full w-1.5 cursor-col-resize select-none hover:bg-blue-400/60 active:bg-blue-500"
+                      title="Drag to resize"
+                    />
+                  </th>
+                ))}
               </tr>
             </thead>
             <tbody>
@@ -270,48 +320,48 @@ const DatabasePage: React.FC<Props> = ({ onBack }) => {
                 return (
                   <tr key={church.id} className={`border-b border-slate-200 ${rowBg} hover:bg-blue-50/40 transition-colors`}>
                     {/* Name + Org Type — sticky */}
-                    <td className={`sticky left-0 z-10 px-4 py-1 border-r border-slate-200 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.06)] ${rowBg}`}>
-                      <span className="font-bold text-sm text-slate-900 leading-tight block truncate max-w-[190px]">{church.name}</span>
+                    <td className={`sticky left-0 z-10 px-4 py-0.5 border-r border-slate-200 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.06)] ${rowBg}`}>
+                      <span className="font-bold text-sm text-slate-900 leading-tight block truncate max-w-full">{church.name}</span>
                       {church.organizationType && (
-                        <span className="text-[10px] font-bold text-slate-500 uppercase truncate block max-w-[190px]">
+                        <span className="text-[10px] font-bold text-slate-500 uppercase truncate block max-w-full">
                           {church.organizationType}
                         </span>
                       )}
                     </td>
                     {/* Address */}
-                    <td className="px-4 py-1 border-r border-slate-200">
-                      <span className="text-xs text-slate-600 truncate block max-w-[180px]" title={church.address}>{church.address || '—'}</span>
+                    <td className="px-4 py-0.5 border-r border-slate-200">
+                      <span className="text-xs text-slate-600 truncate block max-w-full" title={church.address}>{church.address || '—'}</span>
                       {church.serviceTimes && (
-                        <span className="text-[10px] text-slate-400 truncate block max-w-[180px]">{church.serviceTimes}</span>
+                        <span className="text-[10px] text-slate-400 truncate block max-w-full">{church.serviceTimes}</span>
                       )}
                     </td>
                     {/* City */}
-                    <td className="px-4 py-1 border-r border-slate-200 text-sm text-slate-600">{church.city || '—'}</td>
+                    <td className="px-4 py-0.5 border-r border-slate-200 text-sm text-slate-600">{church.city || '—'}</td>
                     {/* Country */}
-                    <td className="px-4 py-1 border-r border-slate-200 text-sm text-slate-600">{countryName}</td>
+                    <td className="px-4 py-0.5 border-r border-slate-200 text-sm text-slate-600">{countryName}</td>
                     {/* Pastor */}
-                    <td className="px-4 py-1 border-r border-slate-200">
-                      <span className="text-sm text-slate-700 truncate block max-w-[130px]">{church.pastor || '—'}</span>
+                    <td className="px-4 py-0.5 border-r border-slate-200">
+                      <span className="text-sm text-slate-700 truncate block max-w-full">{church.pastor || '—'}</span>
                       {church.founded && (
                         <span className="text-[10px] text-slate-400 font-bold uppercase">Est. {church.founded}</span>
                       )}
                     </td>
                     {/* Phone */}
-                    <td className="px-4 py-1 border-r border-slate-200">
+                    <td className="px-4 py-0.5 border-r border-slate-200 whitespace-nowrap">
                       {church.phone ? (
                         <a href={`tel:${church.phone}`} className="text-sm text-slate-700 hover:text-green-700">{church.phone}</a>
                       ) : <span className="text-sm text-slate-400">—</span>}
                     </td>
                     {/* Website */}
-                    <td className="px-4 py-1 border-r border-slate-200">
+                    <td className="px-4 py-0.5 border-r border-slate-200">
                       {websiteUrl ? (
-                        <a href={websiteUrl} target="_blank" rel="noopener noreferrer" className="text-xs text-blue-600 hover:underline truncate block max-w-[150px]">
+                        <a href={websiteUrl} target="_blank" rel="noopener noreferrer" className="text-xs text-blue-600 hover:underline truncate block max-w-full">
                           {websiteUrl.replace(/^https?:\/\//, '').split('/')[0]}
                         </a>
                       ) : <span className="text-sm text-slate-400">—</span>}
                     </td>
                     {/* Socials */}
-                    <td className="px-4 py-1 border-r border-slate-200">
+                    <td className="px-4 py-0.5 border-r border-slate-200">
                       <div className="flex items-center gap-2">
                         {fbUrl && (
                           <a href={fbUrl} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:text-blue-800" title="Facebook">
@@ -338,15 +388,15 @@ const DatabasePage: React.FC<Props> = ({ onBack }) => {
                       </div>
                     </td>
                     {/* Description */}
-                    <td className="px-4 py-1 border-r border-slate-200">
-                      <p className="text-xs text-slate-600 line-clamp-2 max-w-[240px]">{church.description || '—'}</p>
+                    <td className="px-4 py-0.5 border-r border-slate-200">
+                      <p className="text-xs text-slate-600 truncate max-w-full">{church.description || '—'}</p>
                     </td>
                     {/* Saved */}
-                    <td className="px-4 py-1 border-r border-slate-200 text-xs text-slate-500 whitespace-nowrap">
+                    <td className="px-4 py-0.5 border-r border-slate-200 text-xs text-slate-500 whitespace-nowrap">
                       {church.savedAt ? new Date(church.savedAt).toLocaleDateString() : '—'}
                     </td>
                     {/* Outreach Status */}
-                    <td className="px-4 py-1 border-r border-slate-200">
+                    <td className="px-4 py-0.5 border-r border-slate-200">
                       <select
                         value={status}
                         disabled={updatingId === church.id}
@@ -359,7 +409,7 @@ const DatabasePage: React.FC<Props> = ({ onBack }) => {
                       </select>
                     </td>
                     {/* Delete */}
-                    <td className="px-4 py-1 text-center">
+                    <td className="px-4 py-0.5 text-center">
                       <button
                         onClick={() => handleDelete(church)}
                         disabled={deletingId === church.id}
