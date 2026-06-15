@@ -80,7 +80,6 @@ const App: React.FC = () => {
   const [error, setError]                 = useState<string | null>(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [saveStatus, setSaveStatus]       = useState<string | null>(null);
-  const [searchMode, setSearchMode]       = useState<'AI' | 'PLACES'>('AI');
 
   const initialForm: ChurchSearchParams = {
     country: 'US',
@@ -151,37 +150,7 @@ const App: React.FC = () => {
   // ─── Search ────────────────────────────────────────────────────────────────
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (searchMode === 'PLACES') {
-      handlePlacesSearch();
-      return;
-    }
-    setStatus(AppStatus.SEARCHING);
-    setViewMode('GRID');
-    setChurches([]);
-    setSearchProgress(0);
-    setSelectedIds(new Set());
-    setSelectedChurch(null);
-    setResearch(null);
-    setBatchResearch(null);
-    setError(null);
-    setSaveStatus(null);
-
-    try {
-      // Load previously saved church names for this country to exclude from new results
-      const savedNames = await churchService.getSavedChurchNames(form.country);
-
-      const { churches: results } = await churchService.searchChurches(
-        form,
-        pct => setSearchProgress(pct),
-        savedNames
-      );
-      setChurches(results);
-      setStatus(AppStatus.IDLE);
-    } catch (err: any) {
-      console.error(err);
-      setError(err.message || 'Search failed. The system may be rate-limited.');
-      setStatus(AppStatus.ERROR);
-    }
+    handlePlacesSearch();
   };
 
   // ─── Save results to DB ────────────────────────────────────────────────────
@@ -400,40 +369,6 @@ const App: React.FC = () => {
                 <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest">AI-Powered Search</span>
               </div>
             </div>
-          </div>
-
-          {/* Search mode toggle */}
-          <div className="mb-4">
-            <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1.5">Search Mode</p>
-            <div className="flex rounded-md border border-slate-300 overflow-hidden">
-              <button
-                type="button"
-                onClick={() => setSearchMode('AI')}
-                className={`flex-1 py-2 text-[10px] font-bold uppercase tracking-wider transition-colors ${
-                  searchMode === 'AI'
-                    ? 'bg-slate-900 text-white'
-                    : 'bg-white text-slate-500 hover:bg-slate-100'
-                }`}
-              >
-                AI Discovery
-              </button>
-              <button
-                type="button"
-                onClick={() => setSearchMode('PLACES')}
-                className={`flex-1 py-2 text-[10px] font-bold uppercase tracking-wider transition-colors border-l border-slate-300 ${
-                  searchMode === 'PLACES'
-                    ? 'bg-slate-900 text-white'
-                    : 'bg-white text-slate-500 hover:bg-slate-100'
-                }`}
-              >
-                Google Places
-              </button>
-            </div>
-            {searchMode === 'PLACES' && (
-              <p className="text-[9px] text-slate-400 mt-1.5 leading-tight">
-                Real verified locations. Only Location + Org Type are used.
-              </p>
-            )}
           </div>
 
           {/* Form label */}
@@ -678,7 +613,7 @@ const App: React.FC = () => {
         </header>
 
         {/* Content area */}
-        <section className="flex-1 overflow-hidden">
+        <section className="flex-1 flex flex-col overflow-hidden">
 
           {/* Error banner */}
           {error && (
@@ -697,7 +632,7 @@ const App: React.FC = () => {
 
           {/* GRID view */}
           {viewMode === 'GRID' && (
-            <div className="h-full flex flex-col">
+            <div className="flex-1 flex flex-col">
               {status === AppStatus.SEARCHING ? (
                 <div className="flex-1 flex flex-col items-center justify-center bg-slate-50 p-10">
                   <div className="w-full max-w-xl space-y-8 text-center">
@@ -716,27 +651,27 @@ const App: React.FC = () => {
                       </div>
                       <div className="mt-4 flex flex-col items-center">
                         <span className="text-5xl font-black text-slate-900 tracking-tighter tabular-nums">{searchProgress}%</span>
-                        <span className="text-[10px] font-black text-blue-600 uppercase tracking-[0.2em] mt-1">Discovery Progress</span>
+                        <span className="text-[10px] font-black text-blue-600 uppercase tracking-[0.2em] mt-1">Search Progress</span>
                       </div>
                     </div>
                   </div>
                 </div>
               ) : churches.length > 0 ? (
-                <div className="flex-1 overflow-x-auto overflow-y-auto bg-slate-50">
-                  <table className="w-full text-left border-collapse table-fixed min-w-[1500px]">
+                <div className="flex-1 min-h-0 overflow-x-auto overflow-y-auto bg-slate-50">
+                  <table className="w-full text-left border-collapse table-fixed min-w-[1900px]">
                     <thead className="sticky top-0 z-40 bg-slate-200 border-b border-slate-400">
                       <tr>
-                        <th className="sticky left-0 z-50 px-4 py-3 bg-slate-200 border-r border-slate-300 w-[50px] text-center shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]">
+                        <th className="sticky left-0 z-50 px-4 py-2 bg-slate-200 border-r border-slate-300 w-[50px] text-center shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]">
                           <input type="checkbox" checked={isAllSelected} onChange={toggleAll} className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer" />
                         </th>
-                        <th className="sticky left-[50px] z-50 px-4 py-3 bg-slate-200 text-xs font-bold text-slate-700 uppercase border-r border-slate-400 w-[220px] shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]">Church</th>
-                        <th className="px-4 py-3 text-xs font-bold text-slate-700 uppercase border-r border-slate-300 w-[280px]">Address / Services</th>
-                        <th className="px-4 py-3 text-xs font-bold text-slate-700 uppercase border-r border-slate-300 w-[180px]">Pastor</th>
-                        <th className="px-4 py-3 text-xs font-bold text-slate-700 uppercase border-r border-slate-300 w-[150px]">Phone</th>
-                        <th className="px-4 py-3 text-xs font-bold text-slate-700 uppercase border-r border-slate-300 w-[180px]">Website</th>
-                        <th className="px-4 py-3 text-xs font-bold text-slate-700 uppercase border-r border-slate-300 w-[110px]">Socials</th>
-                        <th className="px-4 py-3 text-xs font-bold text-slate-700 uppercase border-r border-slate-300 w-[300px]">Description</th>
-                        <th className="px-4 py-3 text-center text-xs font-bold text-slate-700 uppercase w-[80px]">Inspect</th>
+                        <th className="sticky left-[50px] z-50 px-4 py-2 bg-slate-200 text-xs font-bold text-slate-700 uppercase border-r border-slate-400 w-[260px] shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]">Church</th>
+                        <th className="px-4 py-2 text-xs font-bold text-slate-700 uppercase border-r border-slate-300 w-[380px]">Address / Services</th>
+                        <th className="px-4 py-2 text-xs font-bold text-slate-700 uppercase border-r border-slate-300 w-[220px]">Pastor</th>
+                        <th className="px-4 py-2 text-xs font-bold text-slate-700 uppercase border-r border-slate-300 w-[160px]">Phone</th>
+                        <th className="px-4 py-2 text-xs font-bold text-slate-700 uppercase border-r border-slate-300 w-[240px]">Website</th>
+                        <th className="px-4 py-2 text-xs font-bold text-slate-700 uppercase border-r border-slate-300 w-[110px]">Socials</th>
+                        <th className="px-4 py-2 text-xs font-bold text-slate-700 uppercase border-r border-slate-300 w-[460px]">Description</th>
+                        <th className="px-4 py-2 text-center text-xs font-bold text-slate-700 uppercase w-[80px]">Inspect</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -770,7 +705,7 @@ const App: React.FC = () => {
 
           {/* DETAIL view */}
           {viewMode === 'DETAIL' && (
-            <div className="h-full overflow-auto bg-slate-200 p-6 md:p-10">
+            <div className="flex-1 overflow-auto bg-slate-200 p-6 md:p-10">
               <div className="max-w-5xl mx-auto bg-white rounded-lg border border-slate-400 shadow-2xl overflow-hidden">
                 <ChurchResearchPanel
                   church={selectedChurch}
@@ -783,7 +718,7 @@ const App: React.FC = () => {
 
           {/* BATCH SUMMARY view */}
           {viewMode === 'BATCH_SUMMARY' && (
-            <div className="h-full overflow-auto bg-slate-200 p-6 md:p-10">
+            <div className="flex-1 overflow-auto bg-slate-200 p-6 md:p-10">
               <div className="max-w-5xl mx-auto bg-white rounded-lg border border-slate-400 shadow-2xl overflow-hidden">
                 {researchLoading && !batchResearch ? (
                   <div className="p-20 flex flex-col items-center justify-center text-center">

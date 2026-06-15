@@ -189,19 +189,6 @@ app.get('/api/db/churches', async (req, res) => {
   }
 });
 
-// ─── GET /api/db/church-names ─────────────────────────────────────────────────
-// Returns names for the exclusion list when running a new search.
-// Pass ?country=XX to scope results to that country only.
-app.get('/api/db/church-names', async (req, res) => {
-  const userId = req.user.sub;
-  const country = typeof req.query.country === 'string' ? req.query.country.trim().toUpperCase() : null;
-  let query = supabaseAdmin.from('churches').select('name, country').eq('userId', userId);
-  if (country) query = query.or(`country.is.null,country.ilike.${country}`);
-  const { data, error } = await query;
-  if (error) return res.status(500).json({ error: 'Failed to load church names.' });
-  res.json((data || []).map(c => c.name));
-});
-
 // ─── POST /api/db/churches ────────────────────────────────────────────────────
 // Saves churches to the DB; skips duplicates (matched by name + city)
 app.post('/api/db/churches', async (req, res) => {
@@ -465,141 +452,6 @@ app.post('/api/batch-summarize', async (req, res) => {
   }
 });
 
-// ─── POST /api/search-churches ───────────────────────────────────────────────
-app.post('/api/search-churches', async (req, res) => {
-  try {
-    let { country, location, includeChurches, includeMinistries, keywords, quantity, excludeList, batchSize } = req.body;
-
-    location = location || '';
-    quantity = Number(quantity);
-    batchSize = Number(batchSize);
-    if (!Number.isInteger(quantity) || quantity < 1 || quantity > 200) {
-      return res.status(400).json({ error: 'quantity must be an integer between 1 and 200.' });
-    }
-    if (!Number.isInteger(batchSize) || batchSize < 1 || batchSize > 30) {
-      return res.status(400).json({ error: 'batchSize must be an integer between 1 and 30.' });
-    }
-
-    const onlyMinistries = includeMinistries && !includeChurches;
-    const onlyChurches = includeChurches && !includeMinistries;
-    const both = includeChurches && includeMinistries;
-
-    country = country ? sanitize(country) : '';
-    location = sanitize(location);
-    keywords = keywords ? sanitize(keywords) : '';
-    excludeList = typeof excludeList === 'string' ? sanitize(excludeList, 2000) : '';
-
-    validatePromptField(location, 'location');
-    if (keywords) validatePromptField(keywords, 'keywords');
-    // Fix 6: country was missing injection validation
-    if (country) validatePromptField(country, 'country');
-    // Fix 1: excludeList was missing injection validation
-    if (excludeList) validatePromptField(excludeList, 'excludeList');
-
-    const result = await callWithRetry(async () => {
-      const locationLine = country
-        ? `Location: """${location}""", Country: """${country}"""`
-        : `Location: """${location}"""`;
-
-      const keywordsClause = keywords
-        ? `Focus / keywords: """${keywords}"""`
-        : '';
-      const excludeClause = excludeList
-        ? `DO NOT include any of these already-found organizations: [${excludeList}].`
-        : '';
-
-      const filterLines = [keywordsClause, excludeClause]
-        .filter(Boolean)
-        .join('\n');
-
-      let prompt;
-      if (both) {
-        prompt = `Task: Find ${batchSize} real, currently active Christian organizations — a mix of Protestant churches AND Christian ministry organizations (parachurch ministries, nonprofits, mission agencies, youth ministries, food/homeless ministries, counseling centers, campus ministries, etc.) — in the specified location. Use Google Search to verify each organization exists. Try to include a balanced mix of both churches and ministries.
-
-${locationLine}
-${filterLines}
-
-Instructions:
-1. Verify each organization has an active website, Google listing, or directory entry.
-2. Find the lead pastor, executive director, or primary leader name if publicly listed.
-3. Include the physical street address, phone number, and website URL.
-4. Write a 2-3 sentence description of the organization's identity, mission, and community focus.
-5. Include Facebook, Instagram, or YouTube page URLs if found.
-6. Set confidenceScore 0-100 based on how much verified data you actually found.
-7. In the organizationType field, describe what type of organization this is (e.g. "Baptist Church", "Non-Denominational Church", "Youth Ministry", "Missions Agency", "Food Pantry", "Campus Ministry").
-8. NEVER invent or hallucinate addresses, phone numbers, or names. Only report what you find.
-
-Return exactly ${batchSize} objects as a JSON array.`;
-      } else if (onlyMinistries) {
-        prompt = `Task: Find ${batchSize} real, currently active Christian ministry organizations (parachurch ministries, Christian nonprofits, mission agencies, youth ministries, food/homeless ministries, counseling centers, campus ministries, etc.) in the specified location. Use Google Search to verify each organization exists.
-
-${locationLine}
-${filterLines}
-
-Instructions:
-1. Search for real ministry organizations — verify each one has an active website, Google listing, or directory entry.
-2. Find the executive director, president, or primary leader name if publicly listed.
-3. Include the physical street address, phone number, and website URL.
-4. Write a 2-3 sentence description of the ministry's mission, focus area, and community impact.
-5. Include Facebook, Instagram, or YouTube page URLs if found.
-6. Set confidenceScore 0-100 based on how much verified data you actually found.
-7. In the organizationType field, describe what type of ministry this is (e.g. "Youth Ministry", "Missions Agency", "Food Pantry", "Campus Ministry", "Counseling Center").
-8. NEVER invent or hallucinate addresses, phone numbers, or leader names. Only report what you find.
-
-Return exactly ${batchSize} objects as a JSON array.`;
-      } else {
-        prompt = `Task: Find ${batchSize} real, currently active Protestant Christian churches in the specified location. Use Google Search to verify each church exists.
-
-${locationLine}
-${filterLines}
-
-Instructions:
-1. Search for real churches — verify each one has an active website, Google listing, or directory entry.
-2. Find the lead pastor or senior pastor name if publicly listed.
-3. Include the physical street address, phone number, and website URL.
-4. Note congregation size if publicly mentioned anywhere.
-5. Note typical service times if listed on their site or Google listing.
-6. Write a 2-3 sentence description of the church's identity, worship style, and community focus.
-7. Include Facebook, Instagram, or YouTube page URLs if found.
-8. Set confidenceScore 0-100 based on how much verified data you actually found (100 = full details confirmed).
-9. In the organizationType field, describe the church tradition (e.g. "Baptist Church", "Non-Denominational", "Methodist Church").
-10. NEVER invent or hallucinate addresses, phone numbers, or pastor names. Only report what you find.
-
-Return exactly ${batchSize} objects as a JSON array.`;
-      }
-
-      // Each object must use these exact keys: name, organizationType, address, city,
-      // website, phone, email, pastor, founded, congregationSize, serviceTimes,
-      // description, facebook, instagram, youtube, confidenceScore, sourceEvidence.
-      // Google Search grounding can't be combined with responseMimeType/responseSchema,
-      // so JSON shape is enforced via the prompt and parsed from text.
-      const response = await ai.models.generateContent({
-        model: MODEL_NAME,
-        contents: prompt + '\n\nReturn ONLY a raw JSON array — no markdown, no code fences, no prose. Each object must use these exact keys: name, organizationType, address, city, website, phone, email, pastor, founded, congregationSize, serviceTimes, description, facebook, instagram, youtube, confidenceScore, sourceEvidence.',
-        config: {
-          tools: [{ googleSearch: {} }]
-        }
-      });
-
-      const parsed = parseJsonResponse(response.text, []);
-      const churches = (Array.isArray(parsed) ? parsed : []).map((c, index) => ({
-        ...c,
-        id: `church-${Date.now()}-${index}-${Math.random().toString(36).substr(2, 5)}`,
-        city: c.city || location,
-        country: country || null
-      }));
-      const sources = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
-      return { churches, sources };
-    });
-
-    res.json(result);
-  } catch (err) {
-    console.error('[/api/search-churches]', err);
-    if (err.status === 400) return res.status(400).json({ error: err.message });
-    res.status(500).json({ error: 'An internal error occurred.' });
-  }
-});
-
 // ─── POST /api/research-church ────────────────────────────────────────────────
 app.post('/api/research-church', async (req, res) => {
   try {
@@ -660,7 +512,7 @@ Return ONLY a raw JSON object — no markdown, no code fences, no prose — with
 // Finds real churches via Google Places Text Search API (no AI hallucination)
 app.post('/api/search-churches-places', async (req, res) => {
   try {
-    let { location, includeChurches, includeMinistries, quantity } = req.body;
+    let { country, countryName, location, includeChurches, includeMinistries, quantity } = req.body;
 
     location = location || '';
 
@@ -673,13 +525,23 @@ app.post('/api/search-churches-places', async (req, res) => {
     location = sanitize(location);
     validatePromptField(location, 'location');
 
+    // ISO 3166-1 Alpha-2 region code used to scope Places results to the selected country.
+    const regionCode = typeof country === 'string' && /^[A-Za-z]{2}$/.test(country.trim())
+      ? country.trim().toUpperCase()
+      : null;
+    countryName = countryName ? sanitize(countryName) : '';
+    if (countryName) validatePromptField(countryName, 'country');
+
+    // Build the geographic scope for the text query: "City, Country" when both are present.
+    const place = [location, countryName].filter(Boolean).join(', ');
+
     const bothTypes = includeChurches && includeMinistries;
     const onlyMin = includeMinistries && !includeChurches;
     const textQuery = bothTypes
-      ? `Christian church or ministry organization in ${location}`
+      ? `Christian church or ministry organization in ${place}`
       : onlyMin
-        ? `Christian ministry nonprofit organization in ${location}`
-        : `Protestant Christian church in ${location}`;
+        ? `Christian ministry nonprofit organization in ${place}`
+        : `Protestant Christian church in ${place}`;
 
     const allPlaces = [];
     let nextPageToken = null;
@@ -688,6 +550,7 @@ app.post('/api/search-churches-places', async (req, res) => {
       const body = {
         textQuery,
         maxResultCount: Math.min(20, quantity - allPlaces.length),
+        ...(regionCode ? { regionCode } : {}),
         ...(nextPageToken ? { pageToken: nextPageToken } : {})
       };
 
@@ -696,7 +559,7 @@ app.post('/api/search-churches-places', async (req, res) => {
         headers: {
           'Content-Type': 'application/json',
           'X-Goog-Api-Key': PLACES_KEY,
-          'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.nationalPhoneNumber,places.websiteUri,nextPageToken'
+          'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.addressComponents,places.nationalPhoneNumber,places.websiteUri,nextPageToken'
         },
         body: JSON.stringify(body)
       });
@@ -715,12 +578,25 @@ app.post('/api/search-churches-places', async (req, res) => {
       await new Promise(r => setTimeout(r, 500));
     } while (allPlaces.length < quantity);
 
+    // Extract the city (locality) from a Places result's structured address components,
+    // falling back through finer-to-coarser admin levels, then to the user-typed location.
+    const extractCity = (p) => {
+      const comps = Array.isArray(p.addressComponents) ? p.addressComponents : [];
+      const byType = (type) => comps.find(c => Array.isArray(c.types) && c.types.includes(type));
+      const match = byType('locality')
+        || byType('postal_town')
+        || byType('administrative_area_level_2')
+        || byType('administrative_area_level_1');
+      return match?.longText || match?.shortText || location || '';
+    };
+
     const churches = allPlaces.slice(0, quantity).map((p, i) => ({
       id: `place-${Date.now()}-${i}-${Math.random().toString(36).substr(2, 5)}`,
       name: p.displayName?.text || 'Unknown Organization',
       organizationType: onlyMin ? 'Christian Ministry' : 'Protestant Church',
       address: p.formattedAddress || '',
-      city: location,
+      city: extractCity(p),
+      country: regionCode,
       website: p.websiteUri || null,
       phone: p.nationalPhoneNumber || null,
       email: null,

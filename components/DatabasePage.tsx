@@ -223,7 +223,7 @@ const DatabasePage: React.FC<Props> = ({ onBack }) => {
       )}
 
       {/* Content */}
-      <div className="flex-1 overflow-auto bg-slate-50">
+      <div className="flex-1 min-h-0 overflow-x-auto overflow-y-auto bg-slate-50">
         {loading ? (
           <div className="flex items-center justify-center h-full">
             <div className="w-10 h-10 border-4 border-slate-900 border-t-transparent rounded-full animate-spin" />
@@ -243,18 +243,18 @@ const DatabasePage: React.FC<Props> = ({ onBack }) => {
           <table className="w-full text-left border-collapse" style={{ minWidth: '1400px' }}>
             <thead className="sticky top-0 z-10 bg-slate-200 border-b border-slate-400">
               <tr>
-                <th className="sticky left-0 z-20 bg-slate-200 px-4 py-3 text-xs font-bold text-slate-700 uppercase border-r border-slate-300 w-[220px]">Name / Type</th>
-                <th className="px-4 py-3 text-xs font-bold text-slate-700 uppercase border-r border-slate-300 w-[200px]">Address</th>
-                <th className="px-4 py-3 text-xs font-bold text-slate-700 uppercase border-r border-slate-300 w-[130px]">City</th>
-                <th className="px-4 py-3 text-xs font-bold text-slate-700 uppercase border-r border-slate-300 w-[120px]">Country</th>
-                <th className="px-4 py-3 text-xs font-bold text-slate-700 uppercase border-r border-slate-300 w-[150px]">Pastor</th>
-                <th className="px-4 py-3 text-xs font-bold text-slate-700 uppercase border-r border-slate-300 w-[140px]">Phone</th>
-                <th className="px-4 py-3 text-xs font-bold text-slate-700 uppercase border-r border-slate-300 w-[160px]">Website</th>
-                <th className="px-4 py-3 text-xs font-bold text-slate-700 uppercase border-r border-slate-300 w-[100px]">Socials</th>
-                <th className="px-4 py-3 text-xs font-bold text-slate-700 uppercase border-r border-slate-300 w-[260px]">Description</th>
-                <th className="px-4 py-3 text-xs font-bold text-slate-700 uppercase border-r border-slate-300 w-[90px]">Saved</th>
-                <th className="px-4 py-3 text-xs font-bold text-slate-700 uppercase border-r border-slate-300 w-[170px]">Outreach Status</th>
-                <th className="px-4 py-3 text-xs font-bold text-slate-700 uppercase w-[60px] text-center">Del</th>
+                <th className="sticky left-0 z-20 bg-slate-200 px-4 py-1 text-xs font-bold text-slate-700 uppercase border-r border-slate-300 w-[220px]">Name / Type</th>
+                <th className="px-4 py-1 text-xs font-bold text-slate-700 uppercase border-r border-slate-300 w-[200px]">Address</th>
+                <th className="px-4 py-1 text-xs font-bold text-slate-700 uppercase border-r border-slate-300 w-[130px]">City</th>
+                <th className="px-4 py-1 text-xs font-bold text-slate-700 uppercase border-r border-slate-300 w-[120px]">Country</th>
+                <th className="px-4 py-1 text-xs font-bold text-slate-700 uppercase border-r border-slate-300 w-[150px]">Pastor</th>
+                <th className="px-4 py-1 text-xs font-bold text-slate-700 uppercase border-r border-slate-300 w-[140px]">Phone</th>
+                <th className="px-4 py-1 text-xs font-bold text-slate-700 uppercase border-r border-slate-300 w-[160px]">Website</th>
+                <th className="px-4 py-1 text-xs font-bold text-slate-700 uppercase border-r border-slate-300 w-[100px]">Socials</th>
+                <th className="px-4 py-1 text-xs font-bold text-slate-700 uppercase border-r border-slate-300 w-[260px]">Description</th>
+                <th className="px-4 py-1 text-xs font-bold text-slate-700 uppercase border-r border-slate-300 w-[90px]">Saved</th>
+                <th className="px-4 py-1 text-xs font-bold text-slate-700 uppercase border-r border-slate-300 w-[170px]">Outreach Status</th>
+                <th className="px-4 py-1 text-xs font-bold text-slate-700 uppercase w-[60px] text-center">Del</th>
               </tr>
             </thead>
             <tbody>
@@ -270,7 +270,7 @@ const DatabasePage: React.FC<Props> = ({ onBack }) => {
                 return (
                   <tr key={church.id} className={`border-b border-slate-200 ${rowBg} hover:bg-blue-50/40 transition-colors`}>
                     {/* Name + Org Type — sticky */}
-                    <td className={`sticky left-0 z-10 px-4 py-3 border-r border-slate-200 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.06)] ${rowBg}`}>
+                    <td className={`sticky left-0 z-10 px-4 py-1 border-r border-slate-200 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.06)] ${rowBg}`}>
                       <span className="font-bold text-sm text-slate-900 leading-tight block truncate max-w-[190px]">{church.name}</span>
                       {church.organizationType && (
                         <span className="text-[10px] font-bold text-slate-500 uppercase truncate block max-w-[190px]">
@@ -279,31 +279,31 @@ const DatabasePage: React.FC<Props> = ({ onBack }) => {
                       )}
                     </td>
                     {/* Address */}
-                    <td className="px-4 py-3 border-r border-slate-200">
+                    <td className="px-4 py-1 border-r border-slate-200">
                       <span className="text-xs text-slate-600 truncate block max-w-[180px]" title={church.address}>{church.address || '—'}</span>
                       {church.serviceTimes && (
                         <span className="text-[10px] text-slate-400 truncate block max-w-[180px]">{church.serviceTimes}</span>
                       )}
                     </td>
                     {/* City */}
-                    <td className="px-4 py-3 border-r border-slate-200 text-sm text-slate-600">{church.city || '—'}</td>
+                    <td className="px-4 py-1 border-r border-slate-200 text-sm text-slate-600">{church.city || '—'}</td>
                     {/* Country */}
-                    <td className="px-4 py-3 border-r border-slate-200 text-sm text-slate-600">{countryName}</td>
+                    <td className="px-4 py-1 border-r border-slate-200 text-sm text-slate-600">{countryName}</td>
                     {/* Pastor */}
-                    <td className="px-4 py-3 border-r border-slate-200">
+                    <td className="px-4 py-1 border-r border-slate-200">
                       <span className="text-sm text-slate-700 truncate block max-w-[130px]">{church.pastor || '—'}</span>
                       {church.founded && (
                         <span className="text-[10px] text-slate-400 font-bold uppercase">Est. {church.founded}</span>
                       )}
                     </td>
                     {/* Phone */}
-                    <td className="px-4 py-3 border-r border-slate-200">
+                    <td className="px-4 py-1 border-r border-slate-200">
                       {church.phone ? (
                         <a href={`tel:${church.phone}`} className="text-sm text-slate-700 hover:text-green-700">{church.phone}</a>
                       ) : <span className="text-sm text-slate-400">—</span>}
                     </td>
                     {/* Website */}
-                    <td className="px-4 py-3 border-r border-slate-200">
+                    <td className="px-4 py-1 border-r border-slate-200">
                       {websiteUrl ? (
                         <a href={websiteUrl} target="_blank" rel="noopener noreferrer" className="text-xs text-blue-600 hover:underline truncate block max-w-[150px]">
                           {websiteUrl.replace(/^https?:\/\//, '').split('/')[0]}
@@ -311,7 +311,7 @@ const DatabasePage: React.FC<Props> = ({ onBack }) => {
                       ) : <span className="text-sm text-slate-400">—</span>}
                     </td>
                     {/* Socials */}
-                    <td className="px-4 py-3 border-r border-slate-200">
+                    <td className="px-4 py-1 border-r border-slate-200">
                       <div className="flex items-center gap-2">
                         {fbUrl && (
                           <a href={fbUrl} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:text-blue-800" title="Facebook">
@@ -338,20 +338,20 @@ const DatabasePage: React.FC<Props> = ({ onBack }) => {
                       </div>
                     </td>
                     {/* Description */}
-                    <td className="px-4 py-3 border-r border-slate-200">
+                    <td className="px-4 py-1 border-r border-slate-200">
                       <p className="text-xs text-slate-600 line-clamp-2 max-w-[240px]">{church.description || '—'}</p>
                     </td>
                     {/* Saved */}
-                    <td className="px-4 py-3 border-r border-slate-200 text-xs text-slate-500 whitespace-nowrap">
+                    <td className="px-4 py-1 border-r border-slate-200 text-xs text-slate-500 whitespace-nowrap">
                       {church.savedAt ? new Date(church.savedAt).toLocaleDateString() : '—'}
                     </td>
                     {/* Outreach Status */}
-                    <td className="px-4 py-3 border-r border-slate-200">
+                    <td className="px-4 py-1 border-r border-slate-200">
                       <select
                         value={status}
                         disabled={updatingId === church.id}
                         onChange={e => handleStatusChange(church, e.target.value as OutreachStatus)}
-                        className={`w-full text-xs font-bold border rounded px-2 py-1.5 cursor-pointer focus:outline-none focus:ring-2 focus:ring-slate-400 appearance-none ${cfg.color} ${updatingId === church.id ? 'opacity-50' : ''}`}
+                        className={`w-full text-xs font-bold border rounded px-2 py-1 cursor-pointer focus:outline-none focus:ring-2 focus:ring-slate-400 appearance-none ${cfg.color} ${updatingId === church.id ? 'opacity-50' : ''}`}
                       >
                         {STATUS_ORDER.map(s => (
                           <option key={s} value={s}>{STATUS_CONFIG[s].label}</option>
@@ -359,11 +359,11 @@ const DatabasePage: React.FC<Props> = ({ onBack }) => {
                       </select>
                     </td>
                     {/* Delete */}
-                    <td className="px-4 py-3 text-center">
+                    <td className="px-4 py-1 text-center">
                       <button
                         onClick={() => handleDelete(church)}
                         disabled={deletingId === church.id}
-                        className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors disabled:opacity-50"
+                        className="p-1 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors disabled:opacity-50"
                         title="Remove from database"
                       >
                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">

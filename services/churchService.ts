@@ -1,8 +1,7 @@
 
 import { Church, ChurchSearchParams, ChurchResearch, BatchChurchResearch, OutreachStatus } from '../types';
 import { supabase } from '../lib/supabase';
-
-const BATCH_SIZE = 10;
+import { COUNTRIES } from '../constants/countries';
 
 export class ChurchService {
   private sanitizeInput(val: string, maxLen = 300): string {
@@ -40,82 +39,6 @@ export class ChurchService {
     throw lastError;
   }
 
-  async searchChurches(
-    params: ChurchSearchParams,
-    onProgress?: (percent: number) => void,
-    preExcludeNames: string[] = []
-  ): Promise<{ churches: Church[]; sources: any[] }> {
-    const totalRequested = params.quantity;
-    let allChurches: Church[] = [];
-    let allSources: any[] = [];
-    let attempts = 0;
-    const maxAttempts = Math.ceil(totalRequested / (BATCH_SIZE * 0.8)) + 2;
-
-    if (onProgress) onProgress(0);
-
-    while (allChurches.length < totalRequested && attempts < maxAttempts) {
-      attempts++;
-      const remaining = totalRequested - allChurches.length;
-      const currentBatch = Math.min(BATCH_SIZE, remaining);
-      // Combine names found so far in this session + names from DB
-      const excludeList = [...preExcludeNames, ...allChurches.map(c => c.name)].join(', ');
-
-      const { churches: batch, sources: batchSources } = await this.fetchBatch(
-        params, currentBatch, excludeList
-      );
-
-      if (batch.length === 0) break;
-
-      allChurches = [...allChurches, ...batch];
-      allSources = [...allSources, ...batchSources];
-
-      const progress = Math.min(Math.round((allChurches.length / totalRequested) * 100), 100);
-      if (onProgress) onProgress(progress);
-    }
-
-    if (onProgress) onProgress(100);
-
-    return {
-      churches: allChurches.slice(0, totalRequested),
-      sources: allSources
-    };
-  }
-
-  private async fetchBatch(
-    params: ChurchSearchParams,
-    batchSize: number,
-    excludeList: string
-  ): Promise<{ churches: Church[]; sources: any[] }> {
-    return this.callWithRetry(async () => {
-      const response = await this.authedFetch('/api/search-churches', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          country: this.sanitizeInput(params.country),
-          location: this.sanitizeInput(params.location || ''),
-          includeChurches: params.includeChurches,
-          includeMinistries: params.includeMinistries,
-          keywords: this.sanitizeInput(params.keywords),
-          quantity: batchSize,
-          excludeList: this.sanitizeInput(excludeList, 2000),
-          batchSize
-        })
-      });
-
-      if (!response.ok) {
-        const err = await response.json().catch(() => ({ error: response.statusText }));
-        throw new Error(err.error || err.message || `HTTP ${response.status}`);
-      }
-
-      const { churches: raw, sources } = await response.json();
-      const churches: Church[] = (Array.isArray(raw) ? raw : []).map((c: any, i: number) => ({
-        ...c,
-        id: `church-${Date.now()}-${i}-${Math.random().toString(36).substr(2, 5)}`
-      }));
-      return { churches, sources: sources || [] };
-    });
-  }
-
   async deepResearch(church: Church): Promise<ChurchResearch> {
     return this.callWithRetry(async () => {
       const response = await this.authedFetch('/api/research-church', {
@@ -131,17 +54,6 @@ export class ChurchService {
 
       return response.json() as Promise<ChurchResearch>;
     });
-  }
-
-  async getSavedChurchNames(country?: string): Promise<string[]> {
-    try {
-      const url = country
-        ? `/api/db/church-names?country=${encodeURIComponent(country)}`
-        : '/api/db/church-names';
-      const response = await this.authedFetch(url);
-      if (!response.ok) return [];
-      return response.json();
-    } catch { return []; }
   }
 
   async getSavedChurches(): Promise<Church[]> {
@@ -185,10 +97,15 @@ export class ChurchService {
   ): Promise<{ churches: Church[] }> {
     if (onProgress) onProgress(20);
 
+    const countryCode = (params.country || '').trim().toUpperCase();
+    const countryName = COUNTRIES.find(c => c.code === countryCode)?.name || '';
+
     const response = await this.authedFetch('/api/search-churches-places', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
+        country: countryCode,
+        countryName,
         location: this.sanitizeInput(params.location || ''),
         includeChurches: params.includeChurches,
         includeMinistries: params.includeMinistries,

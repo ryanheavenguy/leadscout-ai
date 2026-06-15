@@ -51,7 +51,7 @@ const ChurchCard: React.FC<ChurchCardProps> = ({
     >
       {/* Checkbox */}
       <td
-        className={`sticky left-0 z-30 px-4 py-3 border-r border-slate-200 w-[50px] text-center shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)] ${stickyBg}`}
+        className={`sticky left-0 z-30 px-4 py-1.5 border-r border-slate-200 w-[50px] text-center shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)] ${stickyBg}`}
         onClick={e => e.stopPropagation()}
       >
         <input
@@ -63,56 +63,55 @@ const ChurchCard: React.FC<ChurchCardProps> = ({
       </td>
 
       {/* Name + Org Type */}
-      <td className={`sticky left-[50px] z-30 px-4 py-3 border-r border-slate-200 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)] ${stickyBg}`}>
-        <div className="flex flex-col gap-1">
-          <span className="text-sm font-bold text-slate-900 truncate max-w-[170px]">{church.name}</span>
-          <div className="flex items-center gap-1.5">
-            {church.organizationType && (
-              <span className="text-[10px] font-bold text-slate-500 uppercase truncate max-w-[120px]">
-                {church.organizationType}
-              </span>
-            )}
-            {church.confidenceScore !== undefined && (
-              <span
-                className={`text-[8px] px-1.5 py-0.5 rounded-full border font-black ${getConfColor(church.confidenceScore)}`}
-                title="Data confidence score"
-              >
-                {church.confidenceScore}%
-              </span>
-            )}
-          </div>
-          {church.city && (
-            <span className="text-[10px] text-slate-400 truncate max-w-[170px]">{church.city}</span>
+      <td className={`sticky left-[50px] z-30 px-4 py-1.5 border-r border-slate-200 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)] ${stickyBg}`}>
+        <div className="flex items-center gap-1.5 whitespace-nowrap">
+          <span className="text-sm font-bold text-slate-900 truncate max-w-[200px]">{church.name}</span>
+          {church.confidenceScore !== undefined && (
+            <span
+              className={`text-[8px] px-1.5 py-0.5 rounded-full border font-black ${getConfColor(church.confidenceScore)}`}
+              title="Data confidence score"
+            >
+              {church.confidenceScore}%
+            </span>
           )}
+        </div>
+        <div className="flex items-center gap-1.5 whitespace-nowrap text-[10px] text-slate-400">
+          {church.organizationType && (
+            <span className="font-bold text-slate-500 uppercase truncate max-w-[140px]">{church.organizationType}</span>
+          )}
+          {church.city && <span className="truncate max-w-[140px]">{church.city}</span>}
         </div>
       </td>
 
       {/* Address */}
-      <td className="px-4 py-3 border-r border-slate-200">
-        <span className="text-sm text-slate-700 truncate block max-w-[250px]" title={church.address}>
+      <td className="px-4 py-1.5 border-r border-slate-200">
+        <span className="text-sm text-slate-700 truncate block max-w-[360px]" title={church.address}>
           {church.address || '—'}
         </span>
+        {(church.city || church.country) && (
+          <span className="text-[10px] text-slate-400 font-medium truncate block max-w-[360px]">
+            {[church.city, church.country].filter(Boolean).join(', ')}
+          </span>
+        )}
         {church.serviceTimes && (
-          <span className="text-[10px] text-slate-400 truncate block max-w-[250px]" title={church.serviceTimes}>
+          <span className="text-[10px] text-slate-400 truncate block max-w-[360px]" title={church.serviceTimes}>
             {church.serviceTimes}
           </span>
         )}
       </td>
 
       {/* Pastor */}
-      <td className="px-4 py-3 border-r border-slate-200">
-        <div className="flex flex-col">
-          <span className="text-sm font-medium text-slate-800 truncate max-w-[160px]">
-            {church.pastor || '—'}
-          </span>
-          {church.founded && (
-            <span className="text-[10px] text-slate-400 font-bold uppercase">Est. {church.founded}</span>
-          )}
-        </div>
+      <td className="px-4 py-1.5 border-r border-slate-200 whitespace-nowrap">
+        <span className="text-sm font-medium text-slate-800 truncate inline-block max-w-[200px] align-middle">
+          {church.pastor || '—'}
+        </span>
+        {church.founded && (
+          <span className="text-[10px] text-slate-400 font-bold uppercase ml-1.5">Est. {church.founded}</span>
+        )}
       </td>
 
       {/* Phone */}
-      <td className="px-4 py-3 border-r border-slate-200">
+      <td className="px-4 py-1.5 border-r border-slate-200 whitespace-nowrap">
         {church.phone ? (
           <a
             href={`tel:${church.phone}`}
@@ -127,14 +126,14 @@ const ChurchCard: React.FC<ChurchCardProps> = ({
       </td>
 
       {/* Website */}
-      <td className="px-4 py-3 border-r border-slate-200">
+      <td className="px-4 py-1.5 border-r border-slate-200">
         {websiteUrl ? (
           <a
             href={websiteUrl}
             target="_blank"
             rel="noopener noreferrer"
             onClick={e => e.stopPropagation()}
-            className="text-sm text-blue-600 hover:underline truncate block max-w-[160px]"
+            className="text-sm text-blue-600 hover:underline truncate block max-w-[220px]"
           >
             {websiteUrl.replace(/^https?:\/\//, '').split('/')[0]}
           </a>
@@ -144,7 +143,7 @@ const ChurchCard: React.FC<ChurchCardProps> = ({
       </td>
 
       {/* Socials */}
-      <td className="px-4 py-3 border-r border-slate-200">
+      <td className="px-4 py-1.5 border-r border-slate-200">
         <div className="flex items-center gap-2">
           {fbUrl && (
             <a href={fbUrl} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()} className="text-blue-600 hover:text-blue-800" title="Facebook">
@@ -172,12 +171,12 @@ const ChurchCard: React.FC<ChurchCardProps> = ({
       </td>
 
       {/* Description */}
-      <td className="px-4 py-3 border-r border-slate-200">
-        <p className="text-xs text-slate-600 line-clamp-2 max-w-[280px]">{church.description}</p>
+      <td className="px-4 py-1.5 border-r border-slate-200">
+        <p className="text-xs text-slate-600 truncate max-w-[440px]" title={church.description}>{church.description}</p>
       </td>
 
       {/* Inspect */}
-      <td className="px-4 py-3 text-center">
+      <td className="px-4 py-1.5 text-center">
         <button className="p-1.5 bg-slate-100 rounded border border-slate-300 hover:bg-blue-600 hover:text-white transition-colors shadow-sm">
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M9 5l7 7-7 7" />
