@@ -7,9 +7,12 @@ export interface Church {
   organizationType?: string;
   address: string;
   city: string;
+  state?: string;
   country?: string;
   website?: string;
   phone?: string;
+  phoneCountryCode?: string;
+  phoneIsWhatsApp?: boolean;
   email?: string;
   pastor?: string;
   founded?: string;
@@ -28,10 +31,15 @@ export interface Church {
 export interface ChurchSearchParams {
   country: string;
   location?: string;
+  /** Search radius in miles around the location. Only applied when a location is set. */
+  radius?: number;
   includeChurches: boolean;
   includeMinistries: boolean;
   keywords: string;
   quantity: number;
+  filterJesus?: boolean;
+  filterEvangelical?: boolean;
+  filterChristian?: boolean;
 }
 
 export interface ChurchResearch {

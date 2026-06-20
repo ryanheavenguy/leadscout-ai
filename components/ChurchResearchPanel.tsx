@@ -6,9 +6,10 @@ interface Props {
   church: Church | null;
   research: ChurchResearch | null;
   loading: boolean;
+  onInspect: (church: Church) => void;
 }
 
-const ChurchResearchPanel: React.FC<Props> = ({ church, research, loading }) => {
+const ChurchResearchPanel: React.FC<Props> = ({ church, research, loading, onInspect }) => {
   if (!church) return null;
 
   const websiteUrl = church.website
@@ -103,76 +104,107 @@ const ChurchResearchPanel: React.FC<Props> = ({ church, research, loading }) => 
           <p className="text-slate-400 text-xs mt-1">Searching web for history, ministries, and recent news</p>
         </div>
       ) : research ? (
-        <div className="p-8 bg-slate-50 grid grid-cols-1 md:grid-cols-2 gap-8">
-          {/* Left column */}
-          <div className="space-y-6">
-            <Section title="Summary">
-              <p className="text-sm text-slate-700 leading-relaxed">{research.summary}</p>
-            </Section>
-
-            {research.missionStatement && (
-              <Section title="Mission Statement">
-                <blockquote className="border-l-4 border-slate-900 pl-4 italic text-sm text-slate-700 leading-relaxed">
-                  "{research.missionStatement}"
-                </blockquote>
-              </Section>
-            )}
-
-            <Section title="History">
-              <p className="text-sm text-slate-700 leading-relaxed">{research.history}</p>
-            </Section>
-
-            {research.contactVerification && (
-              <Section title="Data Freshness">
-                <p className="text-xs text-slate-500 leading-relaxed">{research.contactVerification}</p>
-              </Section>
-            )}
+        <div className="flex flex-col">
+          {/* Inspect button in header */}
+          <div className="bg-white border-b border-slate-200 px-8 py-4 flex items-center justify-between">
+            <h3 className="text-sm font-black text-slate-900 uppercase tracking-widest">Research Results</h3>
+            <button
+              onClick={() => onInspect(church)}
+              className="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white font-black uppercase tracking-widest text-xs px-4 py-2 rounded transition-colors"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M21 21l-4.35-4.35M11 19a8 8 0 100-16 8 8 0 000 16z" />
+              </svg>
+              Re-inspect
+            </button>
           </div>
-
-          {/* Right column */}
-          <div className="space-y-6">
-            {research.leadership.length > 0 && (
-              <Section title="Leadership">
-                <ul className="space-y-1">
-                  {research.leadership.map((person, i) => (
-                    <li key={i} className="text-sm text-slate-700 flex items-start gap-2">
-                      <span className="text-slate-400 mt-0.5">•</span>
-                      {person}
-                    </li>
-                  ))}
-                </ul>
+          <div className="p-8 bg-slate-50 grid grid-cols-1 md:grid-cols-2 gap-8">
+            {/* Left column */}
+            <div className="space-y-6">
+              <Section title="Summary">
+                <p className="text-sm text-slate-700 leading-relaxed">{research.summary}</p>
               </Section>
-            )}
 
-            {research.ministries.length > 0 && (
-              <Section title="Ministries & Programs">
-                <div className="flex flex-wrap gap-2">
-                  {research.ministries.map((m, i) => (
-                    <span key={i} className="text-xs font-bold bg-slate-200 text-slate-700 px-2.5 py-1 rounded-full">
-                      {m}
-                    </span>
-                  ))}
-                </div>
-              </Section>
-            )}
+              {research.missionStatement && (
+                <Section title="Mission Statement">
+                  <blockquote className="border-l-4 border-slate-900 pl-4 italic text-sm text-slate-700 leading-relaxed">
+                    "{research.missionStatement}"
+                  </blockquote>
+                </Section>
+              )}
 
-            {research.recentNews.length > 0 && (
-              <Section title="Recent News & Events">
-                <ul className="space-y-2">
-                  {research.recentNews.map((item, i) => (
-                    <li key={i} className="text-sm text-slate-700 flex items-start gap-2">
-                      <span className="text-blue-500 mt-0.5 shrink-0">›</span>
-                      {item}
-                    </li>
-                  ))}
-                </ul>
+              <Section title="History">
+                <p className="text-sm text-slate-700 leading-relaxed">{research.history}</p>
               </Section>
-            )}
+
+              {research.contactVerification && (
+                <Section title="Data Freshness">
+                  <p className="text-xs text-slate-500 leading-relaxed">{research.contactVerification}</p>
+                </Section>
+              )}
+            </div>
+
+            {/* Right column */}
+            <div className="space-y-6">
+              {research.leadership.length > 0 && (
+                <Section title="Leadership">
+                  <ul className="space-y-1">
+                    {research.leadership.map((person, i) => (
+                      <li key={i} className="text-sm text-slate-700 flex items-start gap-2">
+                        <span className="text-slate-400 mt-0.5">•</span>
+                        {person}
+                      </li>
+                    ))}
+                  </ul>
+                </Section>
+              )}
+
+              {research.ministries.length > 0 && (
+                <Section title="Ministries & Programs">
+                  <div className="flex flex-wrap gap-2">
+                    {research.ministries.map((m, i) => (
+                      <span key={i} className="text-xs font-bold bg-slate-200 text-slate-700 px-2.5 py-1 rounded-full">
+                        {m}
+                      </span>
+                    ))}
+                  </div>
+                </Section>
+              )}
+
+              {research.recentNews.length > 0 && (
+                <Section title="Recent News & Events">
+                  <ul className="space-y-2">
+                    {research.recentNews.map((item, i) => (
+                      <li key={i} className="text-sm text-slate-700 flex items-start gap-2">
+                        <span className="text-blue-500 mt-0.5 shrink-0">›</span>
+                        {item}
+                      </li>
+                    ))}
+                  </ul>
+                </Section>
+              )}
+            </div>
           </div>
         </div>
       ) : (
-        <div className="flex flex-col items-center justify-center py-20 bg-slate-50">
-          <p className="text-slate-400 text-sm">No research data available.</p>
+        <div className="flex flex-col items-center justify-center py-20 bg-slate-50 gap-5">
+          <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center border border-slate-300">
+            <svg className="w-8 h-8 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M21 21l-4.35-4.35M11 19a8 8 0 100-16 8 8 0 000 16z" />
+            </svg>
+          </div>
+          <p className="text-slate-500 text-sm text-center max-w-xs">
+            Click Inspect to research this {church.denomination ? 'organization' : 'church'} — history, leadership, ministries, and recent news.
+          </p>
+          <button
+            onClick={() => onInspect(church)}
+            className="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white font-black uppercase tracking-widest text-xs px-6 py-3 rounded shadow-sm transition-colors"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M21 21l-4.35-4.35M11 19a8 8 0 100-16 8 8 0 000 16z" />
+            </svg>
+            Inspect
+          </button>
         </div>
       )}
     </div>

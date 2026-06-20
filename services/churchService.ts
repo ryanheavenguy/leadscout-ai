@@ -230,6 +230,19 @@ export class ChurchService {
     if (!response.ok) throw new Error('Failed to update status.');
   }
 
+  async updateChurch(id: string, patch: Partial<Church>): Promise<void> {
+    if (IS_DEV) {
+      devChurches = devChurches.map(c => c.id === id ? { ...c, ...patch } : c);
+      return;
+    }
+    const response = await this.authedFetch(`/api/db/churches/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch)
+    });
+    if (!response.ok) throw new Error('Failed to update church.');
+  }
+
   async deleteChurch(id: string): Promise<void> {
     if (IS_DEV) {
       devChurches = devChurches.filter(c => c.id !== id);
@@ -265,9 +278,13 @@ export class ChurchService {
         country: countryCode,
         countryName,
         location: this.sanitizeInput(params.location || ''),
+        radius: params.radius,
         includeChurches: params.includeChurches,
         includeMinistries: params.includeMinistries,
-        quantity: params.quantity
+        quantity: params.quantity,
+        filterJesus: params.filterJesus ?? true,
+        filterEvangelical: params.filterEvangelical ?? true,
+        filterChristian: params.filterChristian ?? true
       })
     });
 

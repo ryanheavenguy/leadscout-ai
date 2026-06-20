@@ -226,18 +226,42 @@ app.post('/api/db/churches', async (req, res) => {
 });
 
 // ─── PATCH /api/db/churches/:id ───────────────────────────────────────────────
+// Accepts a partial update of any editable field (inline table editing) and/or
+// the outreach status.
+const EDITABLE_CHURCH_FIELDS = new Set([
+  'name', 'organizationType', 'address', 'city', 'state', 'country', 'website',
+  'phone', 'email', 'pastor', 'founded', 'congregationSize', 'serviceTimes',
+  'description', 'facebook', 'instagram', 'youtube', 'outreachStatus'
+]);
+
 app.patch('/api/db/churches/:id', async (req, res) => {
   const { id } = req.params;
-  const { outreachStatus } = req.body;
-  const valid = ['not_contacted', 'contacted', 'responded', 'converted'];
-  if (!valid.includes(outreachStatus)) {
-    return res.status(400).json({ error: 'Invalid outreachStatus.' });
+  const userId = req.user.sub;
+
+  const updates = {};
+  for (const [key, value] of Object.entries(req.body || {})) {
+    if (!EDITABLE_CHURCH_FIELDS.has(key)) continue;
+    updates[key] = typeof value === 'string' ? value.trim().slice(0, 2000) : value;
   }
 
-  const userId = req.user.sub;
+  if (Object.keys(updates).length === 0) {
+    return res.status(400).json({ error: 'No editable fields provided.' });
+  }
+
+  if ('outreachStatus' in updates) {
+    const valid = ['not_contacted', 'contacted', 'responded', 'converted'];
+    if (!valid.includes(updates.outreachStatus)) {
+      return res.status(400).json({ error: 'Invalid outreachStatus.' });
+    }
+  }
+
+  if ('name' in updates && !updates.name) {
+    return res.status(400).json({ error: 'Name cannot be empty.' });
+  }
+
   const { data, error } = await supabaseAdmin
     .from('churches')
-    .update({ outreachStatus })
+    .update(updates)
     .eq('id', id)
     .eq('userId', userId)
     .select();
@@ -512,7 +536,7 @@ Return ONLY a raw JSON object — no markdown, no code fences, no prose — with
 // Finds real churches via Google Places Text Search API (no AI hallucination)
 app.post('/api/search-churches-places', async (req, res) => {
   try {
-    let { country, countryName, location, includeChurches, includeMinistries, quantity } = req.body;
+    let { country, countryName, location, radius, includeChurches, includeMinistries, quantity } = req.body;
 
     location = location || '';
 
@@ -522,6 +546,11 @@ app.post('/api/search-churches-places', async (req, res) => {
     }
 
     quantity = Math.min(Math.max(Number(quantity) || 20, 1), 60);
+
+    // Radius (miles) → meters, applied as a locationBias circle around the geocoded location.
+    // Google caps a searchText locationBias circle at 50,000 m, so clamp accordingly.
+    const radiusMiles = Math.min(Math.max(Number(radius) || 0, 0), 50);
+    const radiusMeters = Math.min(Math.round(radiusMiles * 1609.34), 50000);
     location = sanitize(location);
     validatePromptField(location, 'location');
 
@@ -543,6 +572,32 @@ app.post('/api/search-churches-places', async (req, res) => {
         ? `Christian ministry nonprofit organization in ${place}`
         : `Protestant Christian church in ${place}`;
 
+    // When a location + radius are given, geocode the location to a center point so we can
+    // bias Places results to a circle of that radius. Geocoding failures degrade gracefully
+    // to the text-only "in {place}" query.
+    let locationBias = null;
+    if (location && radiusMeters > 0) {
+      try {
+        const geoUrl = new URL('https://maps.googleapis.com/maps/api/geocode/json');
+        geoUrl.searchParams.set('address', place);
+        geoUrl.searchParams.set('key', PLACES_KEY);
+        if (regionCode) geoUrl.searchParams.set('region', regionCode);
+
+        const geoResp = await fetch(geoUrl.toString());
+        if (geoResp.ok) {
+          const geo = await geoResp.json();
+          const loc = geo.results?.[0]?.geometry?.location;
+          if (loc && typeof loc.lat === 'number' && typeof loc.lng === 'number') {
+            locationBias = {
+              circle: { center: { latitude: loc.lat, longitude: loc.lng }, radius: radiusMeters }
+            };
+          }
+        }
+      } catch (geoErr) {
+        console.error('[/api/search-churches-places] geocode failed', geoErr);
+      }
+    }
+
     const allPlaces = [];
     let nextPageToken = null;
 
@@ -551,6 +606,7 @@ app.post('/api/search-churches-places', async (req, res) => {
         textQuery,
         maxResultCount: Math.min(20, quantity - allPlaces.length),
         ...(regionCode ? { regionCode } : {}),
+        ...(locationBias ? { locationBias } : {}),
         ...(nextPageToken ? { pageToken: nextPageToken } : {})
       };
 

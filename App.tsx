@@ -4,11 +4,11 @@ import { Session } from '@supabase/supabase-js';
 import { Church, ChurchSearchParams, ChurchResearch, BatchChurchResearch, AppStatus, ViewMode } from './types';
 import { supabase, isSupabaseConfigured } from './lib/supabase';
 import { churchService } from './services/churchService';
-import ChurchCard from './components/ChurchCard';
 import ChurchResearchPanel from './components/ChurchResearchPanel';
 import DatabasePage from './components/DatabasePage';
 import Login from './components/Login';
 import { COUNTRIES } from './constants/countries';
+import { CHURCH_COLUMNS, ChurchTableHeader, ChurchRow } from './constants/churchColumns';
 
 const App: React.FC = () => {
   // ─── Auth state ─────────────────────────────────────────────────────────────
@@ -81,18 +81,8 @@ const App: React.FC = () => {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [saveStatus, setSaveStatus]       = useState<string | null>(null);
 
-  // ─── Resizable table columns ────────────────────────────────────────────────
-  const COLUMN_DEFS = useMemo(() => ([
-    { key: 'church',      label: 'Church',             width: 260, sticky: true },
-    { key: 'address',     label: 'Address / Services', width: 380 },
-    { key: 'pastor',      label: 'Pastor',             width: 220 },
-    { key: 'phone',       label: 'Phone',              width: 160 },
-    { key: 'website',     label: 'Website',            width: 240 },
-    { key: 'socials',     label: 'Socials',            width: 110 },
-    { key: 'description', label: 'Description',         width: 460 },
-    { key: 'inspect',     label: 'Inspect',            width: 80, center: true },
-  ]), []);
-  const [colWidths, setColWidths] = useState<number[]>(() => COLUMN_DEFS.map(c => c.width));
+  // ─── Resizable table columns (defs shared with the Database table) ───────────
+  const [colWidths, setColWidths] = useState<number[]>(() => CHURCH_COLUMNS.map(c => c.width));
   const resizeRef = useRef<{ index: number; startX: number; startWidth: number } | null>(null);
 
   const startResize = (index: number) => (e: React.MouseEvent) => {
@@ -126,10 +116,14 @@ const App: React.FC = () => {
   const initialForm: ChurchSearchParams = {
     country: 'US',
     location: '',
+    radius: 20,
     includeChurches: true,
     includeMinistries: true,
     keywords: '',
-    quantity: 20
+    quantity: 20,
+    filterJesus: true,
+    filterEvangelical: true,
+    filterChristian: true
   };
   const [form, setForm] = useState<ChurchSearchParams>(initialForm);
 
@@ -212,9 +206,15 @@ const App: React.FC = () => {
   };
 
   // ─── Select church → deep research ─────────────────────────────────────────
-  const handleSelectChurch = async (church: Church) => {
+  const handleSelectChurch = (church: Church) => {
     setSelectedChurch(church);
     setViewMode('DETAIL');
+    setResearch(null);
+    setResearchLoading(false);
+  };
+
+  // ─── Run deep research on demand (manual Inspect click) ─────────────────────
+  const handleInspectChurch = async (church: Church) => {
     setResearch(null);
     setResearchLoading(true);
 
@@ -407,7 +407,7 @@ const App: React.FC = () => {
                 </svg>
               </div>
               <div>
-                <h1 className="text-lg font-black text-slate-900 tracking-tighter leading-none">CHURCH FINDER</h1>
+                <h1 className="text-lg font-black text-slate-900 tracking-tighter leading-none">CHURCH DATABASE</h1>
                 <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest">AI-Powered Search</span>
               </div>
             </div>
@@ -443,11 +443,40 @@ const App: React.FC = () => {
                 placeholder="e.g. Nashville, TN or London"
                 className="w-full px-4 py-2.5 bg-slate-50 border border-slate-300 rounded-md text-sm font-medium text-slate-900 focus:ring-2 focus:ring-slate-400 outline-none"
               />
+
+              {/* Radius — only applied when a location is set, but always shown so it's discoverable */}
+              {(() => {
+                const hasLocation = (form.location ?? '').trim() !== '';
+                return (
+                  <div className={`mt-3 transition-opacity ${hasLocation ? '' : 'opacity-50'}`}>
+                    <label className="block text-xs font-bold text-slate-700 uppercase mb-1.5 flex justify-between">
+                      <span>Radius <span className="normal-case font-normal text-slate-400">(optional)</span></span>
+                      <span className="text-slate-900">{form.radius ?? 20} mi</span>
+                    </label>
+                    <input
+                      type="range"
+                      min="1"
+                      max="50"
+                      step="1"
+                      value={form.radius ?? 20}
+                      disabled={!hasLocation}
+                      onChange={e => setForm(f => ({ ...f, radius: parseInt(e.target.value) }))}
+                      className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-slate-900 disabled:cursor-not-allowed"
+                    />
+                    <div className="flex justify-between text-[10px] text-slate-400 font-bold mt-1">
+                      <span>1 mi</span><span>50 mi</span>
+                    </div>
+                    {!hasLocation && (
+                      <p className="text-[10px] text-slate-400 font-medium mt-1.5">Enter a location above to apply a radius.</p>
+                    )}
+                  </div>
+                );
+              })()}
             </div>
 
             <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase mb-1.5">Search For</label>
-              <div className="flex gap-2">
+              <label className="block text-xs font-bold text-slate-700 uppercase mb-2.5">Search For</label>
+              <div className="grid grid-cols-2 gap-2">
                 <button
                   type="button"
                   onClick={() => setForm(f => {
@@ -456,18 +485,16 @@ const App: React.FC = () => {
                     if (!next && !f.includeMinistries) return f;
                     return { ...f, includeChurches: next };
                   })}
-                  className={`flex-1 py-2 text-[10px] font-bold uppercase tracking-wider rounded-md border transition-colors ${
+                  className={`py-2 text-[10px] font-bold uppercase tracking-wider rounded-md border transition-colors flex items-center justify-center gap-1 ${
                     form.includeChurches
                       ? 'bg-slate-900 text-white border-slate-900'
                       : 'bg-white text-slate-500 border-slate-300 hover:bg-slate-100'
                   }`}
                 >
-                  <span className="flex items-center justify-center gap-1">
-                    <span className={`w-3.5 h-3.5 rounded border flex items-center justify-center shrink-0 ${form.includeChurches ? 'bg-white border-white' : 'bg-white border-slate-400'}`}>
-                      {form.includeChurches && <svg className="w-2.5 h-2.5 text-slate-900" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3.5} d="M5 13l4 4L19 7" /></svg>}
-                    </span>
-                    ⛪ Churches
+                  <span className={`w-3 h-3 rounded border flex items-center justify-center shrink-0 ${form.includeChurches ? 'bg-white border-white' : 'bg-white border-slate-400'}`}>
+                    {form.includeChurches && <svg className="w-2 h-2 text-slate-900" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3.5} d="M5 13l4 4L19 7" /></svg>}
                   </span>
+                  <span className="text-[9px]">⛪ Churches</span>
                 </button>
                 <button
                   type="button"
@@ -476,18 +503,58 @@ const App: React.FC = () => {
                     if (!next && !f.includeChurches) return f;
                     return { ...f, includeMinistries: next };
                   })}
-                  className={`flex-1 py-2 text-[10px] font-bold uppercase tracking-wider rounded-md border transition-colors ${
+                  className={`py-2 text-[10px] font-bold uppercase tracking-wider rounded-md border transition-colors flex items-center justify-center gap-1 ${
                     form.includeMinistries
                       ? 'bg-slate-900 text-white border-slate-900'
                       : 'bg-white text-slate-500 border-slate-300 hover:bg-slate-100'
                   }`}
                 >
-                  <span className="flex items-center justify-center gap-1">
-                    <span className={`w-3.5 h-3.5 rounded border flex items-center justify-center shrink-0 ${form.includeMinistries ? 'bg-white border-white' : 'bg-white border-slate-400'}`}>
-                      {form.includeMinistries && <svg className="w-2.5 h-2.5 text-slate-900" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3.5} d="M5 13l4 4L19 7" /></svg>}
-                    </span>
-                    ✝ Ministries
+                  <span className={`w-3 h-3 rounded border flex items-center justify-center shrink-0 ${form.includeMinistries ? 'bg-white border-white' : 'bg-white border-slate-400'}`}>
+                    {form.includeMinistries && <svg className="w-2 h-2 text-slate-900" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3.5} d="M5 13l4 4L19 7" /></svg>}
                   </span>
+                  <span className="text-[9px]">✝ Ministries</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setForm(f => ({ ...f, filterJesus: !f.filterJesus }))}
+                  className={`py-2 text-[10px] font-bold uppercase tracking-wider rounded-md border transition-colors flex items-center justify-center gap-1 ${
+                    form.filterJesus
+                      ? 'bg-slate-900 text-white border-slate-900'
+                      : 'bg-white text-slate-500 border-slate-300 hover:bg-slate-100'
+                  }`}
+                >
+                  <span className={`w-3 h-3 rounded border flex items-center justify-center shrink-0 ${form.filterJesus ? 'bg-white border-white' : 'bg-white border-slate-400'}`}>
+                    {form.filterJesus && <svg className="w-2 h-2 text-slate-900" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3.5} d="M5 13l4 4L19 7" /></svg>}
+                  </span>
+                  <span className="text-[9px]">Jesus</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setForm(f => ({ ...f, filterEvangelical: !f.filterEvangelical }))}
+                  className={`py-2 text-[10px] font-bold uppercase tracking-wider rounded-md border transition-colors flex items-center justify-center gap-1 ${
+                    form.filterEvangelical
+                      ? 'bg-slate-900 text-white border-slate-900'
+                      : 'bg-white text-slate-500 border-slate-300 hover:bg-slate-100'
+                  }`}
+                >
+                  <span className={`w-3 h-3 rounded border flex items-center justify-center shrink-0 ${form.filterEvangelical ? 'bg-white border-white' : 'bg-white border-slate-400'}`}>
+                    {form.filterEvangelical && <svg className="w-2 h-2 text-slate-900" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3.5} d="M5 13l4 4L19 7" /></svg>}
+                  </span>
+                  <span className="text-[9px]">Evangelical</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setForm(f => ({ ...f, filterChristian: !f.filterChristian }))}
+                  className={`py-2 text-[10px] font-bold uppercase tracking-wider rounded-md border transition-colors flex items-center justify-center gap-1 col-span-2 ${
+                    form.filterChristian
+                      ? 'bg-slate-900 text-white border-slate-900'
+                      : 'bg-white text-slate-500 border-slate-300 hover:bg-slate-100'
+                  }`}
+                >
+                  <span className={`w-3 h-3 rounded border flex items-center justify-center shrink-0 ${form.filterChristian ? 'bg-white border-white' : 'bg-white border-slate-400'}`}>
+                    {form.filterChristian && <svg className="w-2 h-2 text-slate-900" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3.5} d="M5 13l4 4L19 7" /></svg>}
+                  </span>
+                  <span className="text-[9px]">Christian</span>
                 </button>
               </div>
             </div>
@@ -521,6 +588,7 @@ const App: React.FC = () => {
                 placeholder={form.includeMinistries && !form.includeChurches ? 'e.g. youth, missions, food pantry, counseling' : form.includeChurches && form.includeMinistries ? 'e.g. missions, youth, food pantry' : 'e.g. missions-focused, growing, family ministry'}
               />
             </div>
+
           </form>
 
           <div className="pt-6 border-t border-slate-200 space-y-2">
@@ -700,40 +768,29 @@ const App: React.FC = () => {
                 </div>
               ) : churches.length > 0 ? (
                 <div className="flex-1 min-h-0 overflow-x-auto overflow-y-auto bg-slate-50">
-                  <table className="text-left border-collapse table-fixed" style={{ width: 50 + colWidths.reduce((a, b) => a + b, 0) }}>
+                  <table className="text-left border-collapse table-fixed" style={{ width: colWidths.reduce((a, b) => a + b, 0) }}>
                     <colgroup>
-                      <col style={{ width: 50 }} />
                       {colWidths.map((w, i) => <col key={i} style={{ width: w }} />)}
                     </colgroup>
-                    <thead className="sticky top-0 z-40 bg-slate-200 border-b border-slate-400">
-                      <tr>
-                        <th className="sticky left-0 z-50 px-4 py-2 bg-slate-200 border-r border-slate-300 text-center shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]">
-                          <input type="checkbox" checked={isAllSelected} onChange={toggleAll} className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer" />
-                        </th>
-                        {COLUMN_DEFS.map((col, i) => (
-                          <th
-                            key={col.key}
-                            className={`relative px-4 py-2 text-xs font-bold text-slate-700 uppercase ${i < COLUMN_DEFS.length - 1 ? 'border-r' : ''} ${col.center ? 'text-center' : ''} ${col.sticky ? 'sticky left-[50px] z-50 bg-slate-200 border-slate-400 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]' : 'border-slate-300'}`}
-                          >
-                            {col.label}
-                            <div
-                              onMouseDown={startResize(i)}
-                              className="absolute top-0 right-0 h-full w-1.5 cursor-col-resize select-none hover:bg-blue-400/60 active:bg-blue-500"
-                              title="Drag to resize"
-                            />
-                          </th>
-                        ))}
-                      </tr>
-                    </thead>
+                    <ChurchTableHeader
+                      widths={colWidths}
+                      startResize={startResize}
+                      selectAll={{ checked: isAllSelected, onChange: toggleAll }}
+                    />
                     <tbody>
-                      {churches.map(church => (
-                        <ChurchCard
+                      {churches.map((church, i) => (
+                        <ChurchRow
                           key={church.id}
                           church={church}
-                          isActive={selectedChurch?.id === church.id}
-                          isSelected={selectedIds.has(church.id)}
-                          onToggleSelect={toggleSelect}
-                          onSelect={handleSelectChurch}
+                          widths={colWidths}
+                          ctx={{
+                            mode: 'search',
+                            rowBg: i % 2 === 0 ? 'bg-white' : 'bg-slate-50',
+                            isSelected: selectedIds.has(church.id),
+                            isActive: selectedChurch?.id === church.id,
+                            onToggleSelect: toggleSelect,
+                            onRowClick: handleSelectChurch,
+                          }}
                         />
                       ))}
                     </tbody>
@@ -762,6 +819,7 @@ const App: React.FC = () => {
                   church={selectedChurch}
                   research={research}
                   loading={researchLoading}
+                  onInspect={handleInspectChurch}
                 />
               </div>
             </div>
