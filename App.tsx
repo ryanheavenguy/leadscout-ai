@@ -151,31 +151,42 @@ const App: React.FC = () => {
         pct => setSearchProgress(Math.round(pct * 0.6)) // 0–60% for the Places fetch
       );
 
-      setSearchProgress(65);
+      setSearchProgress(95);
 
       if (found.length > 0) {
-        // Google Places returns no pastor/socials — enrich verified results with a grounded
-        // Gemini pass that looks up the lead pastor, social URLs, and a real description.
-        const enrichments = await churchService.enrichChurchesFromPlaces(found);
-        setSearchProgress(95);
-        setChurches(found.map(c => {
-          const e = enrichments[c.id];
-          if (!e) return c;
-          return {
-            ...c,
-            pastor: c.pastor ?? e.pastor ?? undefined,
-            facebook: c.facebook ?? e.facebook ?? undefined,
-            instagram: c.instagram ?? e.instagram ?? undefined,
-            youtube: c.youtube ?? e.youtube ?? undefined,
-            description: e.description || c.description
-          };
-        }));
+        setChurches(found);
+        setStatus(AppStatus.IDLE);
+        setSearchProgress(100);
+
+        // Enrich in background: batch in 60-church chunks (server limit)
+        (async () => {
+          const BATCH_SIZE = 60;
+          for (let i = 0; i < found.length; i += BATCH_SIZE) {
+            const batch = found.slice(i, i + BATCH_SIZE);
+            try {
+              const enrichments = await churchService.enrichChurchesFromPlaces(batch);
+              setChurches(prev => prev.map(c => {
+                const e = enrichments[c.id];
+                if (!e) return c;
+                return {
+                  ...c,
+                  pastor: c.pastor ?? e.pastor ?? undefined,
+                  facebook: c.facebook ?? e.facebook ?? undefined,
+                  instagram: c.instagram ?? e.instagram ?? undefined,
+                  youtube: c.youtube ?? e.youtube ?? undefined,
+                  description: e.description || c.description
+                };
+              }));
+            } catch (err) {
+              console.warn(`Enrichment batch failed (${i}-${i + BATCH_SIZE}):`, err);
+            }
+          }
+        })();
       } else {
         setChurches([]);
+        setStatus(AppStatus.IDLE);
+        setSearchProgress(100);
       }
-
-      setSearchProgress(100);
-      setStatus(AppStatus.IDLE);
     } catch (err: any) {
       console.error(err);
       setError(err.message || 'Places search failed. Check your GOOGLE_PLACES_API_KEY.');

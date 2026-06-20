@@ -21,9 +21,10 @@ const supabaseAdmin = createClient(
 
 // Fix 5: Allowlist of fields that may be persisted — blocks arbitrary field injection
 const ALLOWED_CHURCH_FIELDS = new Set([
-  'id', 'name', 'organizationType', 'address', 'city', 'website', 'phone', 'email',
-  'pastor', 'founded', 'congregationSize', 'serviceTimes', 'description',
-  'facebook', 'instagram', 'youtube', 'confidenceScore', 'sourceEvidence',
+  'id', 'name', 'organizationType', 'address', 'city', 'state', 'website', 'phone', 'email',
+  'pastor', 'founded', 'congregationSize', 'serviceTimes', 'description', 'denomination',
+  'facebook', 'instagram', 'youtube', 'confidenceScore', 'sourceEvidence', 'phoneCountryCode',
+  'phoneIsWhatsApp', 'outreachStatus', 'savedAt',
   'industry', 'location', 'country'
 ]);
 function pickAllowed(church) {
@@ -631,7 +632,7 @@ app.post('/api/search-churches-places', async (req, res) => {
 
       if (!nextPageToken || allPlaces.length >= quantity) break;
       // Brief pause between paginated requests to respect API rate limits
-      await new Promise(r => setTimeout(r, 500));
+      await new Promise(r => setTimeout(r, 100));
     } while (allPlaces.length < quantity);
 
     // Extract the city (locality) from a Places result's structured address components,
@@ -646,12 +647,21 @@ app.post('/api/search-churches-places', async (req, res) => {
       return match?.longText || match?.shortText || location || '';
     };
 
+    // Extract the state/province (administrative_area_level_1) from a Places result.
+    // Returns the short code (e.g. "CA", "TX", "ON") when available, otherwise long name.
+    const extractState = (p) => {
+      const comps = Array.isArray(p.addressComponents) ? p.addressComponents : [];
+      const stateComp = comps.find(c => Array.isArray(c.types) && c.types.includes('administrative_area_level_1'));
+      return stateComp?.shortText || stateComp?.longText || '';
+    };
+
     const churches = allPlaces.slice(0, quantity).map((p, i) => ({
       id: `place-${Date.now()}-${i}-${Math.random().toString(36).substr(2, 5)}`,
       name: p.displayName?.text || 'Unknown Organization',
       organizationType: onlyMin ? 'Christian Ministry' : 'Protestant Church',
       address: p.formattedAddress || '',
       city: extractCity(p),
+      state: extractState(p),
       country: regionCode,
       website: p.websiteUri || null,
       phone: p.nationalPhoneNumber || null,
@@ -746,7 +756,7 @@ app.post('/api/enrich-churches-from-places', async (req, res) => {
       return res.status(400).json({ error: 'Maximum 60 churches per batch.' });
     }
 
-    const CHUNK_SIZE = 10;
+    const CHUNK_SIZE = 5;
     const enrichments = {};
 
     for (let offset = 0; offset < churches.length; offset += CHUNK_SIZE) {
@@ -777,8 +787,6 @@ Rules:
 
 Return ONLY a raw JSON array — no markdown, no code fences, no prose — with one object per organization in the SAME ORDER as the list. Each object must use exactly these keys: pastor, facebook, instagram, youtube, description.`;
 
-      // Google Search grounding can't be combined with responseMimeType/responseSchema,
-      // so JSON shape is enforced via the prompt and parsed from text.
       const parsed = await callWithRetry(async () => {
         const response = await ai.models.generateContent({
           model: MODEL_NAME,
@@ -801,6 +809,10 @@ Return ONLY a raw JSON array — no markdown, no code fences, no prose — with 
           description: e.description || ''
         };
       });
+
+      if (offset + CHUNK_SIZE < churches.length) {
+        await new Promise(r => setTimeout(r, 200));
+      }
     }
 
     res.json({ enrichments });
