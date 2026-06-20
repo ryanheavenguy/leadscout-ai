@@ -77,6 +77,7 @@ const App: React.FC = () => {
   const [batchResearch, setBatchResearch] = useState<BatchChurchResearch | null>(null);
   const [researchLoading, setResearchLoading] = useState(false);
   const [searchProgress, setSearchProgress]   = useState(0);
+  const [enrichingIds, setEnrichingIds]   = useState<Set<string>>(new Set());
   const [error, setError]                 = useState<string | null>(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [saveStatus, setSaveStatus]       = useState<string | null>(null);
@@ -138,6 +139,7 @@ const App: React.FC = () => {
     setViewMode('GRID');
     setChurches([]);
     setSearchProgress(0);
+    setEnrichingIds(new Set());
     setSelectedIds(new Set());
     setSelectedChurch(null);
     setResearch(null);
@@ -158,6 +160,9 @@ const App: React.FC = () => {
         setStatus(AppStatus.IDLE);
         setSearchProgress(100);
 
+        // Mark every result as enriching so the table shows a live "enriching…" tag.
+        setEnrichingIds(new Set(found.map(c => c.id)));
+
         // Enrich in background: batch in 60-church chunks (server limit)
         (async () => {
           const BATCH_SIZE = 60;
@@ -171,6 +176,7 @@ const App: React.FC = () => {
                 return {
                   ...c,
                   pastor: c.pastor ?? e.pastor ?? undefined,
+                  email: c.email ?? e.email ?? undefined,
                   facebook: c.facebook ?? e.facebook ?? undefined,
                   instagram: c.instagram ?? e.instagram ?? undefined,
                   youtube: c.youtube ?? e.youtube ?? undefined,
@@ -179,6 +185,13 @@ const App: React.FC = () => {
               }));
             } catch (err) {
               console.warn(`Enrichment batch failed (${i}-${i + BATCH_SIZE}):`, err);
+            } finally {
+              // Clear the enriching flag for this batch whether it succeeded or failed.
+              setEnrichingIds(prev => {
+                const next = new Set(prev);
+                batch.forEach(c => next.delete(c.id));
+                return next;
+              });
             }
           }
         })();
@@ -778,6 +791,16 @@ const App: React.FC = () => {
                   </div>
                 </div>
               ) : churches.length > 0 ? (
+                <>
+                {enrichingIds.size > 0 && (
+                  <div className="mx-6 mt-4 mb-2 px-4 py-2 bg-blue-50 border border-blue-200 rounded text-sm font-semibold text-blue-700 flex items-center gap-2 shadow-sm">
+                    <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                    </svg>
+                    Enriching {enrichingIds.size} {enrichingIds.size === 1 ? 'result' : 'results'} — finding pastor, email, socials & description…
+                  </div>
+                )}
                 <div className="flex-1 min-h-0 overflow-x-auto overflow-y-auto bg-slate-50">
                   <table className="text-left border-collapse table-fixed" style={{ width: colWidths.reduce((a, b) => a + b, 0) }}>
                     <colgroup>
@@ -801,12 +824,14 @@ const App: React.FC = () => {
                             isActive: selectedChurch?.id === church.id,
                             onToggleSelect: toggleSelect,
                             onRowClick: handleSelectChurch,
+                            enriching: enrichingIds.has(church.id),
                           }}
                         />
                       ))}
                     </tbody>
                   </table>
                 </div>
+                </>
               ) : (
                 <div className="flex flex-col items-center justify-center h-full text-slate-500 gap-4">
                   <div className="w-20 h-20 bg-slate-100 rounded-full flex items-center justify-center border border-slate-300">

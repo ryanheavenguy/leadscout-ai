@@ -140,7 +140,20 @@ export interface ChurchRowContext {
   onInspect?: (church: Church) => void;
   updating?: boolean;
   deleting?: boolean;
+  /** Search: this row is being enriched (pastor/email/socials/description still loading). */
+  enriching?: boolean;
 }
+
+// Animated placeholder shown in still-loading cells during background enrichment.
+const EnrichingTag: React.FC = () => (
+  <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-blue-500 animate-pulse">
+    <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
+      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+    </svg>
+    enriching…
+  </span>
+);
 
 // ─── Inline-editable cell (database mode) ─────────────────────────────────────
 // Double-click the value to edit it; Enter or blur saves, Escape cancels.
@@ -300,6 +313,7 @@ function renderCell(col: ColumnDef, church: Church, ctx: ChurchRowContext): Reac
     }
 
     case 'pastor':
+      if (!church.pastor && ctx.enriching) return <EnrichingTag />;
       return <span className="text-sm text-slate-700 truncate block max-w-full">{church.pastor || '—'}</span>;
 
     case 'phone':
@@ -326,13 +340,12 @@ function renderCell(col: ColumnDef, church: Church, ctx: ChurchRowContext): Reac
       );
 
     case 'email':
-      return church.email ? (
+      if (church.email) return (
         <a href={`mailto:${church.email}`} onClick={stop} className="text-sm text-blue-600 hover:underline truncate block max-w-full">
           {church.email}
         </a>
-      ) : (
-        <span className="text-sm text-slate-400">—</span>
       );
+      return ctx.enriching ? <EnrichingTag /> : <span className="text-sm text-slate-400">—</span>;
 
     case 'website': {
       const websiteUrl = safeUrl(church.website);
@@ -378,12 +391,13 @@ function renderCell(col: ColumnDef, church: Church, ctx: ChurchRowContext): Reac
               </svg>
             </a>
           )}
-          {!fbUrl && !igUrl && !ytUrl && <span className="text-xs text-slate-300">—</span>}
+          {!fbUrl && !igUrl && !ytUrl && (ctx.enriching ? <EnrichingTag /> : <span className="text-xs text-slate-300">—</span>)}
         </div>
       );
     }
 
     case 'description':
+      if (!church.description && ctx.enriching) return <EnrichingTag />;
       return <p className="text-xs text-slate-600 truncate max-w-full" title={church.description}>{church.description || '—'}</p>;
 
     case 'saved':

@@ -321,7 +321,7 @@ export class ChurchService {
 
   async enrichChurchesFromPlaces(
     churches: Church[]
-  ): Promise<Record<string, { pastor: string | null; facebook: string | null; instagram: string | null; youtube: string | null; description: string }>> {
+  ): Promise<Record<string, { pastor: string | null; email: string | null; facebook: string | null; instagram: string | null; youtube: string | null; description: string }>> {
     if (IS_DEV) return {};
     const response = await this.authedFetch('/api/enrich-churches-from-places', {
       method: 'POST',

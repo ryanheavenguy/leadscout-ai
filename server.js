@@ -776,16 +776,17 @@ ${churchList}
 
 For each one, find:
 1. pastor — the lead/senior pastor or primary leader's full name, if publicly listed.
-2. facebook — the official Facebook page URL.
-3. instagram — the official Instagram profile URL.
-4. youtube — the official YouTube channel URL.
-5. description — a concise 2-sentence description of its identity, tradition, and community role.
+2. email — the primary public contact email address (e.g. info@, office@, or a listed staff email), if publicly listed.
+3. facebook — the official Facebook page URL.
+4. instagram — the official Instagram profile URL.
+5. youtube — the official YouTube channel URL.
+6. description — a concise 2-sentence description of its identity, tradition, and community role.
 
 Rules:
-- Use null for any field you cannot verify. NEVER invent or guess names or URLs.
-- Only return social URLs that clearly belong to this specific organization.
+- Use null for any field you cannot verify. NEVER invent or guess names, emails, or URLs.
+- Only return an email or social URL that clearly belongs to this specific organization.
 
-Return ONLY a raw JSON array — no markdown, no code fences, no prose — with one object per organization in the SAME ORDER as the list. Each object must use exactly these keys: pastor, facebook, instagram, youtube, description.`;
+Return ONLY a raw JSON array — no markdown, no code fences, no prose — with one object per organization in the SAME ORDER as the list. Each object must use exactly these keys: pastor, email, facebook, instagram, youtube, description.`;
 
       const parsed = await callWithRetry(async () => {
         const response = await ai.models.generateContent({
@@ -803,6 +804,7 @@ Return ONLY a raw JSON array — no markdown, no code fences, no prose — with 
         const e = arr[i] || {};
         enrichments[c.id] = {
           pastor: e.pastor || null,
+          email: e.email || null,
           facebook: e.facebook || null,
           instagram: e.instagram || null,
           youtube: e.youtube || null,
