@@ -175,11 +175,11 @@ const App: React.FC = () => {
                 if (!e) return c;
                 return {
                   ...c,
-                  pastor: c.pastor ?? e.pastor ?? undefined,
-                  email: c.email ?? e.email ?? undefined,
-                  facebook: c.facebook ?? e.facebook ?? undefined,
-                  instagram: c.instagram ?? e.instagram ?? undefined,
-                  youtube: c.youtube ?? e.youtube ?? undefined,
+                  pastor: e.pastor ?? c.pastor ?? null,
+                  email: e.email ?? c.email ?? null,
+                  facebook: e.facebook ?? c.facebook ?? null,
+                  instagram: e.instagram ?? c.instagram ?? null,
+                  youtube: e.youtube ?? c.youtube ?? null,
                   description: e.description || c.description
                 };
               }));

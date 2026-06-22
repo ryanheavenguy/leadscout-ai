@@ -213,10 +213,27 @@ app.post('/api/db/churches', async (req, res) => {
       outreachStatus: 'not_contacted'
     }));
 
-  const { data, error } = await supabaseAdmin
+  // Get existing churches for this user to check for duplicates
+  const { data: existing, error: existingError } = await supabaseAdmin
     .from('churches')
-    .upsert(rows, { onConflict: 'userId,name,city', ignoreDuplicates: true })
-    .select();
+    .select('name,city')
+    .eq('userId', userId);
+  if (existingError) return res.status(500).json({ error: 'Failed to check existing churches.' });
+
+  // Filter out duplicates (matching name + city)
+  const existingSet = new Set((existing || []).map(c => `${c.name}|${c.city}`));
+  const newRows = rows.filter(r => !existingSet.has(`${r.name}|${r.city}`));
+
+  let data = [];
+  let error = null;
+  if (newRows.length > 0) {
+    const result = await supabaseAdmin
+      .from('churches')
+      .insert(newRows)
+      .select();
+    data = result.data;
+    error = result.error;
+  }
   if (error) return res.status(500).json({ error: 'Failed to save churches.' });
 
   const { count } = await supabaseAdmin

@@ -89,7 +89,9 @@ export const ChurchTableHeader: React.FC<HeaderProps> = ({ widths, startResize, 
           <th
             key={col.key}
             style={col.sticky ? { left: lefts[i] } : undefined}
-            className={`relative px-4 py-2 text-xs font-bold text-slate-700 uppercase whitespace-nowrap overflow-hidden text-ellipsis ${
+            className={`relative px-4 py-2 text-xs font-bold text-slate-700 uppercase whitespace-nowrap overflow-hidden ${
+              col.key !== 'select' ? 'text-ellipsis' : ''
+            } ${
               i < CHURCH_COLUMNS.length - 1 ? 'border-r' : ''
             } ${col.center ? 'text-center' : ''} ${
               col.sticky
