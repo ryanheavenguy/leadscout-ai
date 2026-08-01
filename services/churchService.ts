@@ -278,6 +278,24 @@ export class ChurchService {
     if (!response.ok) throw new Error('Failed to update church.');
   }
 
+  /** Persist an enrichment pass over saved rows in a single request. */
+  async bulkUpdateChurches(updates: (Partial<Church> & { id: string })[]): Promise<number> {
+    if (updates.length === 0) return 0;
+    if (IS_DEV) {
+      const byId = new Map(updates.map(u => [u.id, u]));
+      devChurches = devChurches.map(c => byId.has(c.id) ? { ...c, ...byId.get(c.id)! } : c);
+      return updates.length;
+    }
+    const response = await this.authedFetch('/api/db/churches/bulk-update', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ updates })
+    });
+    if (!response.ok) throw new Error('Failed to save enriched records.');
+    const { updated } = await response.json();
+    return updated || 0;
+  }
+
   async deleteChurch(id: string): Promise<void> {
     if (IS_DEV) {
       devChurches = devChurches.filter(c => c.id !== id);

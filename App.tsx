@@ -169,7 +169,10 @@ const App: React.FC = () => {
         // serverless time limit — a 60-church request used to get killed mid-flight and
         // every church in it came back blank.
         (async () => {
-          const BATCH_SIZE = 20;
+          // Each request now scrapes every org's website before it calls a model, so
+          // the per-request work is heavier — smaller batches keep it inside the
+          // serverless time limit instead of getting killed and losing the whole batch.
+          const BATCH_SIZE = 10;
 
           const runPass = async (targets: Church[]): Promise<string[]> => {
             const unresolved: string[] = [];
@@ -782,7 +785,7 @@ const App: React.FC = () => {
         </header>
 
         {/* Content area */}
-        <section className="flex-1 flex flex-col overflow-hidden">
+        <section className="flex-1 flex flex-col min-h-0 overflow-hidden">
 
           {/* Error banner */}
           {error && (
@@ -851,7 +854,8 @@ const App: React.FC = () => {
                     </button>
                   </div>
                 )}
-                <div className="flex-1 min-h-0 overflow-x-auto overflow-y-auto bg-slate-50">
+                {/* table-scroll owns both overflow axes and keeps the horizontal bar visible */}
+                <div className="flex-1 min-h-0 table-scroll bg-slate-50">
                   <table className="text-left border-collapse table-fixed" style={{ width: colWidths.reduce((a, b) => a + b, 0) }}>
                     <colgroup>
                       {colWidths.map((w, i) => <col key={i} style={{ width: w }} />)}

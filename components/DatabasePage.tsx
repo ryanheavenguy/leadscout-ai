@@ -30,6 +30,8 @@ const DatabasePage: React.FC<Props> = ({ onBack }) => {
   const [selectedChurch, setSelectedChurch] = useState<Church | null>(null);
   const [research, setResearch] = useState<ChurchResearch | null>(null);
   const [researchLoading, setResearchLoading] = useState(false);
+  const [enrichingIds, setEnrichingIds] = useState<Set<string>>(new Set());
+  const [enrichNotice, setEnrichNotice] = useState<string | null>(null);
 
   // ─── Resizable table columns (defs shared with the Search table) ─────────────
   const [colWidths, setColWidths] = useState<number[]>(() => CHURCH_COLUMNS.map(c => c.width));
@@ -177,6 +179,78 @@ const DatabasePage: React.FC<Props> = ({ onBack }) => {
     setSelectedIds(isAllSelected ? new Set() : new Set(filtered.map(c => c.id)));
   };
 
+  // Re-run enrichment over saved rows. Rows saved before a field could be found stay
+  // blank forever otherwise — this is the only way to fill them in after the fact.
+  async function handleEnrichSelected() {
+    const targets = filtered.filter(c => selectedIds.has(c.id));
+    if (targets.length === 0 || enrichingIds.size > 0) return;
+
+    setEnrichNotice(null);
+    setEnrichingIds(new Set(targets.map(c => c.id)));
+
+    // Small batches keep each request inside the serverless time limit.
+    const BATCH_SIZE = 10;
+    let filled = 0;
+    let failed = 0;
+
+    for (let i = 0; i < targets.length; i += BATCH_SIZE) {
+      const batch = targets.slice(i, i + BATCH_SIZE);
+      try {
+        const { enrichments } = await churchService.enrichChurchesFromPlaces(batch);
+        const patches: (Partial<Church> & { id: string })[] = [];
+
+        for (const church of batch) {
+          const e = enrichments[church.id];
+          if (!e) continue;
+
+          const patch: Partial<Church> & { id: string } = { id: church.id };
+          // Fill blanks only — a re-enrich must never clobber a value you typed in.
+          const fill = (key: keyof Church, value: string | null | undefined) => {
+            if (!value || church[key]) return;
+            (patch as any)[key] = value;
+          };
+          fill('pastor', e.pastor);
+          fill('email', e.email);
+          fill('facebook', e.facebook);
+          fill('instagram', e.instagram);
+          fill('youtube', e.youtube);
+          fill('description', e.description);
+          if (!church.phone && e.phone) {
+            patch.phone = e.phone;
+            if (e.phoneCountryCode) patch.phoneCountryCode = e.phoneCountryCode;
+          }
+          if (e.phoneIsWhatsApp && !church.phoneIsWhatsApp) patch.phoneIsWhatsApp = true;
+
+          if (Object.keys(patch).length > 1) patches.push(patch);
+        }
+
+        if (patches.length > 0) {
+          await churchService.bulkUpdateChurches(patches);
+          const byId = new Map(patches.map(p => [p.id, p]));
+          setChurches(prev => prev.map(c => byId.has(c.id) ? { ...c, ...byId.get(c.id)! } : c));
+          filled += patches.length;
+        }
+      } catch (err) {
+        console.warn('Enrichment batch failed', err);
+        failed += batch.length;
+      } finally {
+        setEnrichingIds(prev => {
+          const next = new Set(prev);
+          batch.forEach(c => next.delete(c.id));
+          return next;
+        });
+      }
+    }
+
+    setEnrichNotice(
+      failed > 0
+        ? `Filled ${filled} of ${targets.length} records — ${failed} could not be reached. Select those and try again.`
+        : filled > 0
+          ? `Filled in missing details on ${filled} of ${targets.length} records.`
+          : `No new details found for the ${targets.length} selected record${targets.length > 1 ? 's' : ''}.`
+    );
+  }
+
   async function handleDeleteSelected() {
     const ids = filtered.filter(c => selectedIds.has(c.id)).map(c => c.id);
     if (ids.length === 0) return;
@@ -237,6 +311,28 @@ const DatabasePage: React.FC<Props> = ({ onBack }) => {
           </h2>
         </div>
         <div className="flex items-center gap-3">
+          {selectedIds.size > 0 && (
+            <button
+              onClick={handleEnrichSelected}
+              disabled={enrichingIds.size > 0}
+              title="Look up missing pastor, email, phone and socials for the selected records"
+              className="px-4 py-2 bg-blue-700 text-white rounded font-bold text-xs hover:bg-blue-800 disabled:bg-slate-400 transition-all uppercase shadow-md flex items-center gap-2"
+            >
+              {enrichingIds.size > 0 ? (
+                <>
+                  <span className="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+                  Enriching {enrichingIds.size}…
+                </>
+              ) : (
+                <>
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" />
+                  </svg>
+                  Fill Missing Data ({selectedIds.size})
+                </>
+              )}
+            </button>
+          )}
           {selectedIds.size > 0 && (
             <button
               onClick={handleDeleteSelected}
@@ -309,6 +405,16 @@ const DatabasePage: React.FC<Props> = ({ onBack }) => {
         />
       </div>
 
+      {/* Enrichment result notice */}
+      {enrichNotice && enrichingIds.size === 0 && (
+        <div className="px-6 py-2 bg-blue-50 border-b border-blue-200 text-xs font-bold text-blue-900 flex items-center justify-between shrink-0">
+          <span>{enrichNotice}</span>
+          <button onClick={() => setEnrichNotice(null)} className="text-blue-500 hover:text-blue-800 uppercase tracking-widest">
+            Dismiss
+          </button>
+        </div>
+      )}
+
       {/* Showing count */}
       {!loading && !error && churches.length > 0 && (
         <div className="px-6 py-2 bg-white border-b border-slate-100 text-xs text-slate-500 shrink-0">
@@ -321,7 +427,8 @@ const DatabasePage: React.FC<Props> = ({ onBack }) => {
       )}
 
       {/* Content */}
-      <div className="flex-1 min-h-0 overflow-x-auto overflow-y-auto bg-slate-50">
+      {/* table-scroll owns both overflow axes and keeps the horizontal bar visible */}
+      <div className="flex-1 min-h-0 table-scroll bg-slate-50">
         {loading ? (
           <div className="flex items-center justify-center h-full">
             <div className="w-10 h-10 border-4 border-slate-900 border-t-transparent rounded-full animate-spin" />
@@ -364,6 +471,7 @@ const DatabasePage: React.FC<Props> = ({ onBack }) => {
                     onInspect: handleInspectChurch,
                     updating: updatingId === church.id,
                     deleting: deletingId === church.id,
+                    enriching: enrichingIds.has(church.id),
                   }}
                 />
               ))}

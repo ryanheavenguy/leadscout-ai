@@ -159,6 +159,10 @@ body { font-family: 'Inter', sans-serif !important; background-color: transparen
 
 /* ── Min/Max Sizes ─────────────────────────────────────────── */
 .min-w-0 { min-width: 0; }
+/* Required by the table scrollers: a column flex item's automatic minimum size is
+   its content height, so without this the scroll box grows past the viewport and
+   its horizontal scrollbar renders off-screen. */
+.min-h-0 { min-height: 0; }
 .min-w-\[20rem\] { min-width: 20rem; }
 .min-w-\[1750px\] { min-width: 1750px; }
 .max-w-\[120px\] { max-width: 120px; }
@@ -242,6 +246,8 @@ body { font-family: 'Inter', sans-serif !important; background-color: transparen
 .italic        { font-style: italic; }
 .not-italic    { font-style: normal; }
 .truncate      { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.whitespace-nowrap { white-space: nowrap; }
+.text-ellipsis { text-overflow: ellipsis; }
 .leading-snug    { line-height: 1.375; }
 .leading-relaxed { line-height: 1.625; }
 .tracking-tight    { letter-spacing: -0.025em; }
@@ -460,6 +466,28 @@ body { font-family: 'Inter', sans-serif !important; background-color: transparen
 ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.7); }
 .no-scrollbar::-webkit-scrollbar { display: none; }
 .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+/* ── Wide data tables (Search results + saved-contacts Database) ─────────────
+   These tables are ~2500px wide, so the horizontal scrollbar is essential.
+   The theme bar above is 6px and translucent white — fine over the sky gradient,
+   invisible over the white table — so the table scrollers get their own opaque,
+   always-present bar. Both axes are set here so nothing else can override them. */
+.table-scroll {
+  overflow-x: scroll;
+  overflow-y: auto;
+  min-height: 0;
+  scrollbar-width: auto;
+  scrollbar-color: #64748b #e2e8f0;
+}
+.table-scroll::-webkit-scrollbar { height: 14px; width: 12px; }
+.table-scroll::-webkit-scrollbar-track { background: #e2e8f0; border-top: 1px solid #cbd5e1; }
+.table-scroll::-webkit-scrollbar-thumb {
+  background: #64748b;
+  border: 3px solid #e2e8f0;
+  border-radius: 10px;
+}
+.table-scroll::-webkit-scrollbar-thumb:hover { background: #475569; }
+.table-scroll::-webkit-scrollbar-corner { background: #e2e8f0; }
 
 /* ══════════════════════════════════════════════════
    SKY THEME OVERRIDES
