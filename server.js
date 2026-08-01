@@ -10,6 +10,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { GoogleGenAI, Type } from '@google/genai';
 import { createClient } from '@supabase/supabase-js';
+import { normalizePhone, formatPhone, sameNumber, toE164Digits } from './lib/phone.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -113,7 +114,7 @@ async function callWithRetry(fn, maxRetries = 3) {
       if (error.status === 400) throw error;
       const isRateLimited = error.message?.includes('429') || error.status === 429;
       const isServerError = error.message?.includes('500') || error.status === 500;
-      if (isRateLimited || isServerError) {
+      if (isRateLimited || isServerError || error.retryable) {
         const waitTime = Math.pow(2, i) * 1000 + Math.random() * 1000;
         console.warn(`[server] Gemini rate/server error (attempt ${i + 1}/${maxRetries}). Retrying in ${Math.round(waitTime)}ms...`);
         await new Promise(resolve => setTimeout(resolve, waitTime));
@@ -149,6 +150,76 @@ function parseJsonResponse(text, fallback) {
     return fallback;
   }
 }
+
+// ─── Salvage objects from a partial/truncated JSON array ──────────────────────
+// A grounded reply that hits the token cap ends mid-array, so JSON.parse fails and
+// every organization in the chunk loses its data. Scan for balanced {...} blocks so
+// the objects that did come through are kept.
+function extractJsonObjects(text) {
+  const direct = parseJsonResponse(text, null);
+  if (Array.isArray(direct)) return direct;
+  if (direct && typeof direct === 'object') return [direct];
+
+  const raw = String(text || '');
+  const objects = [];
+  let depth = 0, start = -1, inString = false, escaped = false;
+  for (let i = 0; i < raw.length; i++) {
+    const ch = raw[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === '\\') escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') { inString = true; continue; }
+    if (ch === '{') {
+      if (depth === 0) start = i;
+      depth++;
+    } else if (ch === '}') {
+      if (depth > 0 && --depth === 0 && start !== -1) {
+        try { objects.push(JSON.parse(raw.slice(start, i + 1))); } catch { /* skip */ }
+        start = -1;
+      }
+    }
+  }
+  return objects;
+}
+
+// ─── Enrichment field normalization ───────────────────────────────────────────
+const PLACEHOLDER_RE = /^(n\/?a|na|none|null|nil|unknown|not\s+(found|listed|available|publicly\s+listed|specified)|unavailable|-{1,3})$/i;
+
+function cleanField(value, maxLen = 500) {
+  if (value === null || value === undefined) return null;
+  if (Array.isArray(value)) value = value[0];
+  if (typeof value === 'object') return null;
+  const s = String(value).trim().replace(/[<>]/g, '').slice(0, maxLen);
+  if (!s || PLACEHOLDER_RE.test(s)) return null;
+  return s;
+}
+
+// Models often drop the scheme, or park the church's own site in a social field.
+function cleanUrl(value, requiredHost) {
+  const s = cleanField(value, 300);
+  if (!s) return null;
+  const withScheme = /^https?:\/\//i.test(s) ? s : `https://${s.replace(/^\/+/, '')}`;
+  let url;
+  try { url = new URL(withScheme); } catch { return null; }
+  const host = url.hostname.toLowerCase();
+  if (requiredHost && !host.endsWith(requiredHost)) return null;
+  // A bare domain with no handle/path carries no information.
+  if (requiredHost && url.pathname.replace(/\/+$/, '') === '') return null;
+  return url.toString();
+}
+
+const EMAIL_RE = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i;
+function cleanEmail(value) {
+  const s = cleanField(value, 254);
+  if (!s) return null;
+  const match = s.match(EMAIL_RE);
+  return match ? match[0].toLowerCase() : null;
+}
+
+const normalizeName = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 
 // ─── Auth middleware ──────────────────────────────────────────────────────────
 async function requireAuth(req, res, next) {
@@ -554,9 +625,10 @@ Return ONLY a raw JSON object — no markdown, no code fences, no prose — with
 // Finds real churches via Google Places Text Search API (no AI hallucination)
 app.post('/api/search-churches-places', async (req, res) => {
   try {
-    let { country, countryName, location, radius, includeChurches, includeMinistries, quantity } = req.body;
+    let { country, countryName, location, keywords, radius, includeChurches, includeMinistries, quantity } = req.body;
 
     location = location || '';
+    keywords = keywords || '';
 
     const PLACES_KEY = process.env.GOOGLE_PLACES_API_KEY;
     if (!PLACES_KEY) {
@@ -571,6 +643,8 @@ app.post('/api/search-churches-places', async (req, res) => {
     const radiusMeters = Math.min(Math.round(radiusMiles * 1609.34), 50000);
     location = sanitize(location);
     validatePromptField(location, 'location');
+    keywords = sanitize(keywords, 200);
+    if (keywords) validatePromptField(keywords, 'keywords');
 
     // ISO 3166-1 Alpha-2 region code used to scope Places results to the selected country.
     const regionCode = typeof country === 'string' && /^[A-Za-z]{2}$/.test(country.trim())
@@ -584,11 +658,12 @@ app.post('/api/search-churches-places', async (req, res) => {
 
     const bothTypes = includeChurches && includeMinistries;
     const onlyMin = includeMinistries && !includeChurches;
-    const textQuery = bothTypes
+    const baseQuery = bothTypes
       ? `Christian church or ministry organization in ${place}`
       : onlyMin
         ? `Christian ministry nonprofit organization in ${place}`
         : `Protestant Christian church in ${place}`;
+    const textQuery = keywords ? `${baseQuery} focused on ${keywords}` : baseQuery;
 
     // When a location + radius are given, geocode the location to a center point so we can
     // bias Places results to a circle of that radius. Geocoding failures degrade gracefully
@@ -633,7 +708,7 @@ app.post('/api/search-churches-places', async (req, res) => {
         headers: {
           'Content-Type': 'application/json',
           'X-Goog-Api-Key': PLACES_KEY,
-          'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.addressComponents,places.nationalPhoneNumber,places.websiteUri,nextPageToken'
+          'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.addressComponents,places.nationalPhoneNumber,places.internationalPhoneNumber,places.websiteUri,nextPageToken'
         },
         body: JSON.stringify(body)
       });
@@ -672,28 +747,46 @@ app.post('/api/search-churches-places', async (req, res) => {
       return stateComp?.shortText || stateComp?.longText || '';
     };
 
-    const churches = allPlaces.slice(0, quantity).map((p, i) => ({
-      id: `place-${Date.now()}-${i}-${Math.random().toString(36).substr(2, 5)}`,
-      name: p.displayName?.text || 'Unknown Organization',
-      organizationType: onlyMin ? 'Christian Ministry' : 'Protestant Church',
-      address: p.formattedAddress || '',
-      city: extractCity(p),
-      state: extractState(p),
-      country: regionCode,
-      website: p.websiteUri || null,
-      phone: p.nationalPhoneNumber || null,
-      email: null,
-      pastor: null,
-      founded: null,
-      congregationSize: null,
-      serviceTimes: null,
-      description: '',
-      facebook: null,
-      instagram: null,
-      youtube: null,
-      confidenceScore: 95,
-      sourceEvidence: `Google Places ID: ${p.id}`
-    }));
+    // Extract the ISO country code from the Places result so the dial code
+    // reflects where the number actually is, not just the searched region.
+    const extractCountry = (p) => {
+      const comps = Array.isArray(p.addressComponents) ? p.addressComponents : [];
+      const comp = comps.find(c => Array.isArray(c.types) && c.types.includes('country'));
+      return comp?.shortText || regionCode || '';
+    };
+
+    const churches = allPlaces.slice(0, quantity).map((p, i) => {
+      const placeCountry = extractCountry(p);
+      const { phone, phoneCountryCode } = normalizePhone({
+        international: p.internationalPhoneNumber,
+        national: p.nationalPhoneNumber,
+        regionCode: placeCountry
+      });
+
+      return {
+        id: `place-${Date.now()}-${i}-${Math.random().toString(36).substr(2, 5)}`,
+        name: p.displayName?.text || 'Unknown Organization',
+        organizationType: onlyMin ? 'Christian Ministry' : 'Protestant Church',
+        address: p.formattedAddress || '',
+        city: extractCity(p),
+        state: extractState(p),
+        country: placeCountry || regionCode,
+        website: p.websiteUri || null,
+        phone,
+        phoneCountryCode,
+        email: null,
+        pastor: null,
+        founded: null,
+        congregationSize: null,
+        serviceTimes: null,
+        description: '',
+        facebook: null,
+        instagram: null,
+        youtube: null,
+        confidenceScore: 95,
+        sourceEvidence: `Google Places ID: ${p.id}`
+      };
+    });
 
     res.json({ churches });
   } catch (err) {
@@ -761,32 +854,28 @@ ${churchList}`;
 // ─── POST /api/enrich-churches-from-places ────────────────────────────────────
 // Google Places returns no pastor/socials, so enrich verified Places results with a
 // GROUNDED Gemini pass (Google Search) that looks up the lead pastor, social URLs, and a
-// real description per church. Batched in chunks of 10 to keep grounding calls reasonable.
-app.post('/api/enrich-churches-from-places', async (req, res) => {
-  try {
-    const { churches } = req.body;
+// real description per church.
+//
+// Grounded calls are slow and lossy, so the work is chunked and each chunk is isolated:
+// a chunk that fails, parses badly, or runs past the deadline only costs that chunk. Every
+// id we could not enrich comes back in `skipped` so the client can retry just those.
+const ENRICH_CHUNK_SIZE = 5;
+const ENRICH_CONCURRENCY = 3;
+// Vercel caps this function at 60s (vercel.json). Stop starting chunks with enough headroom
+// to serialize what we already have instead of getting killed mid-flight and losing all of it.
+const ENRICH_DEADLINE_MS = Number(process.env.ENRICH_DEADLINE_MS || 45000);
 
-    if (!Array.isArray(churches) || churches.length === 0) {
-      return res.status(400).json({ error: 'churches must be a non-empty array.' });
-    }
-    if (churches.length > 60) {
-      return res.status(400).json({ error: 'Maximum 60 churches per batch.' });
-    }
+function buildEnrichPrompt(chunk) {
+  const churchList = chunk.map((c, i) => {
+    const name = sanitize(c.name || '');
+    const address = c.address ? sanitize(c.address) : '';
+    const website = c.website ? sanitize(c.website) : '';
+    // The known phone lets the model tell us whether THAT line is the WhatsApp one.
+    const phone = c.phone ? sanitize(formatPhone(c.phoneCountryCode, c.phone), 40) : '';
+    return `${i + 1}. "${name}"${address ? `, ${address}` : ''}${website ? ` (${website})` : ''}${phone ? ` [listed phone: ${phone}]` : ''}`;
+  }).join('\n');
 
-    const CHUNK_SIZE = 5;
-    const enrichments = {};
-
-    for (let offset = 0; offset < churches.length; offset += CHUNK_SIZE) {
-      const chunk = churches.slice(offset, offset + CHUNK_SIZE);
-
-      const churchList = chunk.map((c, i) => {
-        const name = sanitize(c.name || '');
-        const address = c.address ? sanitize(c.address) : '';
-        const website = c.website ? sanitize(c.website) : '';
-        return `${i + 1}. "${name}"${address ? `, ${address}` : ''}${website ? ` (${website})` : ''}`;
-      }).join('\n');
-
-      const prompt = `For each organization listed below, use Google Search to find publicly available details. Prefer the organization's own website (look at staff/leadership/about pages) and official social media accounts.
+  return `For each organization listed below, use Google Search to find publicly available details. Prefer the organization's own website (look at staff/leadership/about pages) and official social media accounts.
 
 Organizations:
 ${churchList}
@@ -798,43 +887,151 @@ For each one, find:
 4. instagram — the official Instagram profile URL.
 5. youtube — the official YouTube channel URL.
 6. description — a concise 2-sentence description of its identity, tradition, and community role.
+7. whatsapp — a phone number that the organization PUBLICLY PRESENTS AS A WHATSAPP CONTACT, in international format (e.g. "+234 803 123 4567").
 
 Rules:
 - Use null for any field you cannot verify. NEVER invent or guess names, emails, or URLs.
 - Only return an email or social URL that clearly belongs to this specific organization.
+- For whatsapp, return a number ONLY when the source explicitly ties it to WhatsApp — a "Chat on WhatsApp" / "WhatsApp us" link (wa.me, api.whatsapp.com, chat.whatsapp.com), a number labelled "WhatsApp" on the site or social profile, or a WhatsApp click-to-chat button. Do NOT assume a number is on WhatsApp because it is a mobile number or because the country commonly uses WhatsApp. If no number is explicitly presented as WhatsApp, return null.
+- Return an object for EVERY organization, including ones you found nothing for — use nulls rather than omitting it.
+- Keep the objects in the same order as the list.
 
-Return ONLY a raw JSON array — no markdown, no code fences, no prose — with one object per organization in the SAME ORDER as the list. Each object must use exactly these keys: pastor, email, facebook, instagram, youtube, description.`;
+Each object must use exactly these keys: index, name, pastor, email, facebook, instagram, youtube, description, whatsapp — where "index" is the number from the list above and "name" is the organization name as listed, so the results can be matched back.
 
-      const parsed = await callWithRetry(async () => {
+Return ONLY a raw JSON array — no markdown, no code fences, no prose.`;
+}
+
+// Turn the model's reported WhatsApp number into the fields the client stores.
+// The flag describes the number we DISPLAY, so it is only set when the org's
+// published WhatsApp line is the same line we already show. When a church has no
+// phone at all, the published WhatsApp number becomes its phone.
+function resolveWhatsApp(church, reported) {
+  const raw = cleanField(reported, 40);
+  if (!raw) return { phoneIsWhatsApp: false };
+
+  const { phone, phoneCountryCode } = normalizePhone({
+    international: raw,
+    national: raw,
+    regionCode: church.country
+  });
+  if (!phone) return { phoneIsWhatsApp: false };
+
+  if (!church.phone) {
+    return { phone, phoneCountryCode, phoneIsWhatsApp: true };
+  }
+
+  // Compare E.164 digits, not the formatted strings: that drops the national
+  // trunk prefix, so a site listing "0803…" still matches a stored "+234 803…".
+  const known = toE164Digits(church.phoneCountryCode || phoneCountryCode, church.phone);
+  return { phoneIsWhatsApp: sameNumber(known, toE164Digits(phoneCountryCode, phone)) };
+}
+
+// Positional matching silently shifts every field onto the wrong church when the model
+// drops or reorders an entry, so match on the echoed index/name first.
+function alignEnrichments(chunk, items) {
+  const byIndex = new Map();
+  const byName = new Map();
+  chunk.forEach((c, i) => byName.set(normalizeName(c.name), i));
+
+  const leftovers = [];
+  items.forEach((item, i) => {
+    if (!item || typeof item !== 'object') return;
+    const n = Number(item.index);
+    let idx = Number.isInteger(n) && n >= 1 && n <= chunk.length ? n - 1 : -1;
+    if (idx === -1 && item.name) {
+      const named = byName.get(normalizeName(item.name));
+      if (named !== undefined) idx = named;
+    }
+    if (idx === -1) leftovers.push({ item, i });
+    else if (!byIndex.has(idx)) byIndex.set(idx, item);
+  });
+
+  // Anything the model did not label falls back to its position in the array.
+  leftovers.forEach(({ item, i }) => {
+    if (i < chunk.length && !byIndex.has(i)) byIndex.set(i, item);
+  });
+
+  return byIndex;
+}
+
+app.post('/api/enrich-churches-from-places', async (req, res) => {
+  try {
+    const { churches } = req.body;
+
+    if (!Array.isArray(churches) || churches.length === 0) {
+      return res.status(400).json({ error: 'churches must be a non-empty array.' });
+    }
+    if (churches.length > 60) {
+      return res.status(400).json({ error: 'Maximum 60 churches per batch.' });
+    }
+
+    const startedAt = Date.now();
+    const chunks = [];
+    for (let offset = 0; offset < churches.length; offset += ENRICH_CHUNK_SIZE) {
+      chunks.push(churches.slice(offset, offset + ENRICH_CHUNK_SIZE));
+    }
+
+    const enrichments = {};
+    const skipped = [];
+    let cursor = 0;
+
+    const runChunk = async (chunk) => {
+      const items = await callWithRetry(async () => {
         const response = await ai.models.generateContent({
           model: MODEL_NAME,
-          contents: prompt,
+          contents: buildEnrichPrompt(chunk),
           config: {
             tools: [{ googleSearch: {} }]
           }
         });
-        return parseJsonResponse(response.text, []);
+        const parsed = extractJsonObjects(response.text);
+        if (!parsed.length) {
+          // Unparsable or empty — retry instead of writing a chunk of blanks.
+          throw Object.assign(
+            new Error('Enrichment response contained no usable JSON.'),
+            { retryable: true }
+          );
+        }
+        return parsed;
       });
 
-      const arr = Array.isArray(parsed) ? parsed : [];
+      const aligned = alignEnrichments(chunk, items);
       chunk.forEach((c, i) => {
-        const e = arr[i] || {};
+        const e = aligned.get(i) || {};
         enrichments[c.id] = {
-          pastor: e.pastor || null,
-          email: e.email || null,
-          facebook: e.facebook || null,
-          instagram: e.instagram || null,
-          youtube: e.youtube || null,
-          description: e.description || ''
+          pastor: cleanField(e.pastor, 120),
+          email: cleanEmail(e.email),
+          facebook: cleanUrl(e.facebook, 'facebook.com'),
+          instagram: cleanUrl(e.instagram, 'instagram.com'),
+          youtube: cleanUrl(e.youtube, 'youtube.com') || cleanUrl(e.youtube, 'youtu.be'),
+          description: cleanField(e.description, 1000) || '',
+          ...resolveWhatsApp(c, e.whatsapp)
         };
       });
+    };
 
-      if (offset + CHUNK_SIZE < churches.length) {
-        await new Promise(r => setTimeout(r, 200));
+    const worker = async () => {
+      while (cursor < chunks.length) {
+        const chunk = chunks[cursor++];
+        if (Date.now() - startedAt > ENRICH_DEADLINE_MS) {
+          skipped.push(...chunk.map(c => c.id));
+          continue;
+        }
+        try {
+          await runChunk(chunk);
+        } catch (err) {
+          // One bad chunk must not discard the chunks that succeeded.
+          console.warn('[/api/enrich-churches-from-places] chunk failed:', err.message);
+          skipped.push(...chunk.map(c => c.id));
+        }
       }
-    }
+    };
 
-    res.json({ enrichments });
+    await Promise.all(
+      Array.from({ length: Math.min(ENRICH_CONCURRENCY, chunks.length) }, worker)
+    );
+
+    res.json({ enrichments, skipped });
   } catch (err) {
     console.error('[/api/enrich-churches-from-places]', err);
     res.status(500).json({ error: 'An internal error occurred.' });

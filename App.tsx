@@ -6,8 +6,8 @@ import { supabase, isSupabaseConfigured } from './lib/supabase';
 import { churchService } from './services/churchService';
 import ChurchResearchPanel from './components/ChurchResearchPanel';
 import DatabasePage from './components/DatabasePage';
+import CountrySelect from './components/CountrySelect';
 import Login from './components/Login';
-import { COUNTRIES } from './constants/countries';
 import { CHURCH_COLUMNS, ChurchTableHeader, ChurchRow } from './constants/churchColumns';
 
 const App: React.FC = () => {
@@ -78,6 +78,7 @@ const App: React.FC = () => {
   const [researchLoading, setResearchLoading] = useState(false);
   const [searchProgress, setSearchProgress]   = useState(0);
   const [enrichingIds, setEnrichingIds]   = useState<Set<string>>(new Set());
+  const [enrichNotice, setEnrichNotice]   = useState<string | null>(null);
   const [error, setError]                 = useState<string | null>(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [saveStatus, setSaveStatus]       = useState<string | null>(null);
@@ -140,6 +141,7 @@ const App: React.FC = () => {
     setChurches([]);
     setSearchProgress(0);
     setEnrichingIds(new Set());
+    setEnrichNotice(null);
     setSelectedIds(new Set());
     setSelectedChurch(null);
     setResearch(null);
@@ -163,37 +165,75 @@ const App: React.FC = () => {
         // Mark every result as enriching so the table shows a live "enriching…" tag.
         setEnrichingIds(new Set(found.map(c => c.id)));
 
-        // Enrich in background: batch in 60-church chunks (server limit)
+        // Enrich in background. Batches stay small so each request finishes inside the
+        // serverless time limit — a 60-church request used to get killed mid-flight and
+        // every church in it came back blank.
         (async () => {
-          const BATCH_SIZE = 60;
-          for (let i = 0; i < found.length; i += BATCH_SIZE) {
-            const batch = found.slice(i, i + BATCH_SIZE);
-            try {
-              const enrichments = await churchService.enrichChurchesFromPlaces(batch);
-              setChurches(prev => prev.map(c => {
-                const e = enrichments[c.id];
-                if (!e) return c;
-                return {
-                  ...c,
-                  pastor: e.pastor ?? c.pastor ?? null,
-                  email: e.email ?? c.email ?? null,
-                  facebook: e.facebook ?? c.facebook ?? null,
-                  instagram: e.instagram ?? c.instagram ?? null,
-                  youtube: e.youtube ?? c.youtube ?? null,
-                  description: e.description || c.description
-                };
-              }));
-            } catch (err) {
-              console.warn(`Enrichment batch failed (${i}-${i + BATCH_SIZE}):`, err);
-            } finally {
-              // Clear the enriching flag for this batch whether it succeeded or failed.
-              setEnrichingIds(prev => {
-                const next = new Set(prev);
-                batch.forEach(c => next.delete(c.id));
-                return next;
-              });
+          const BATCH_SIZE = 20;
+
+          const runPass = async (targets: Church[]): Promise<string[]> => {
+            const unresolved: string[] = [];
+            for (let i = 0; i < targets.length; i += BATCH_SIZE) {
+              const batch = targets.slice(i, i + BATCH_SIZE);
+              let done: string[] = [];
+              try {
+                const { enrichments, skipped } = await churchService.enrichChurchesFromPlaces(batch);
+                const skippedSet = new Set(skipped);
+                done = batch.filter(c => !skippedSet.has(c.id)).map(c => c.id);
+                unresolved.push(...batch.filter(c => skippedSet.has(c.id)).map(c => c.id));
+                setChurches(prev => prev.map(c => {
+                  const e = enrichments[c.id];
+                  if (!e) return c;
+                  return {
+                    ...c,
+                    pastor: e.pastor ?? c.pastor ?? null,
+                    email: e.email ?? c.email ?? null,
+                    facebook: e.facebook ?? c.facebook ?? null,
+                    instagram: e.instagram ?? c.instagram ?? null,
+                    youtube: e.youtube ?? c.youtube ?? null,
+                    description: e.description || c.description,
+                    // Only set when the org published a WhatsApp number and had no phone.
+                    phone: e.phone ?? c.phone ?? null,
+                    phoneCountryCode: e.phoneCountryCode ?? c.phoneCountryCode ?? null,
+                    phoneIsWhatsApp: e.phoneIsWhatsApp ?? c.phoneIsWhatsApp ?? false
+                  };
+                }));
+              } catch (err) {
+                console.warn(`Enrichment batch failed (${i}-${i + BATCH_SIZE}):`, err);
+                unresolved.push(...batch.map(c => c.id));
+              } finally {
+                // Only clear the spinner for churches that actually got a result; the rest
+                // stay flagged until the retry pass below is finished with them.
+                setEnrichingIds(prev => {
+                  if (done.length === 0) return prev;
+                  const next = new Set(prev);
+                  done.forEach(id => next.delete(id));
+                  return next;
+                });
+              }
             }
+            return unresolved;
+          };
+
+          let unresolved = await runPass(found);
+
+          // One retry pass for whatever the server ran out of time on.
+          if (unresolved.length > 0) {
+            const retryIds = new Set(unresolved);
+            unresolved = await runPass(found.filter(c => retryIds.has(c.id)));
           }
+
+          setEnrichingIds(prev => {
+            if (prev.size === 0) return prev;
+            const next = new Set(prev);
+            unresolved.forEach(id => next.delete(id));
+            return next;
+          });
+          setEnrichNotice(
+            unresolved.length > 0
+              ? `${unresolved.length} of ${found.length} results could not be enriched — pastor, email and socials may be missing for those rows.`
+              : null
+          );
         })();
       } else {
         setChurches([]);
@@ -447,15 +487,10 @@ const App: React.FC = () => {
 
             <div>
               <label className="block text-xs font-bold text-slate-700 uppercase mb-1.5">Country</label>
-              <select
+              <CountrySelect
                 value={form.country}
-                onChange={e => setForm(f => ({ ...f, country: e.target.value }))}
-                className="w-full px-4 py-2.5 bg-slate-50 border border-slate-300 rounded-md text-sm font-medium text-slate-900 focus:ring-2 focus:ring-slate-400 outline-none"
-              >
-                {COUNTRIES.map(c => (
-                  <option key={c.code} value={c.code}>{c.name}</option>
-                ))}
-              </select>
+                onChange={code => setForm(f => ({ ...f, country: code }))}
+              />
             </div>
 
             <div>
@@ -751,7 +786,7 @@ const App: React.FC = () => {
 
           {/* Error banner */}
           {error && (
-            <div className="m-6 p-4 bg-red-100 text-red-900 rounded border border-red-300 text-sm font-bold shadow-sm flex items-start gap-3 relative">
+            <div className="m-6 p-4 bg-red-100 text-red-900 rounded border border-red-300 text-sm font-bold shadow-sm flex items-start gap-3 relative shrink-0">
               <svg className="w-5 h-5 shrink-0" fill="currentColor" viewBox="0 0 20 20">
                 <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
               </svg>
@@ -766,7 +801,10 @@ const App: React.FC = () => {
 
           {/* GRID view */}
           {viewMode === 'GRID' && (
-            <div className="flex-1 flex flex-col">
+            // min-h-0: without it this wrapper's automatic minimum height grows to the
+            // full table height, so the scroller below never shrinks and rows past the
+            // fold are clipped by the ancestor overflow-hidden instead of scrolling.
+            <div className="flex-1 flex flex-col min-h-0">
               {status === AppStatus.SEARCHING ? (
                 <div className="flex-1 flex flex-col items-center justify-center bg-slate-50 p-10">
                   <div className="w-full max-w-xl space-y-8 text-center">
@@ -793,12 +831,24 @@ const App: React.FC = () => {
               ) : churches.length > 0 ? (
                 <>
                 {enrichingIds.size > 0 && (
-                  <div className="mx-6 mt-4 mb-2 px-4 py-2 bg-blue-50 border border-blue-200 rounded text-sm font-semibold text-blue-700 flex items-center gap-2 shadow-sm">
+                  <div className="mx-6 mt-4 mb-2 px-4 py-2 bg-blue-50 border border-blue-200 rounded text-sm font-semibold text-blue-700 flex items-center gap-2 shadow-sm shrink-0">
                     <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
                       <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                       <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                     </svg>
                     Enriching {enrichingIds.size} {enrichingIds.size === 1 ? 'result' : 'results'} — finding pastor, email, socials & description…
+                  </div>
+                )}
+                {enrichingIds.size === 0 && enrichNotice && (
+                  <div className="mx-6 mt-4 mb-2 px-4 py-2 bg-amber-50 border border-amber-200 rounded text-sm font-semibold text-amber-800 flex items-center justify-between gap-2 shadow-sm shrink-0">
+                    <span>{enrichNotice}</span>
+                    <button
+                      onClick={() => setEnrichNotice(null)}
+                      className="text-amber-700 hover:text-amber-900 font-black px-1"
+                      aria-label="Dismiss"
+                    >
+                      ×
+                    </button>
                   </div>
                 )}
                 <div className="flex-1 min-h-0 overflow-x-auto overflow-y-auto bg-slate-50">

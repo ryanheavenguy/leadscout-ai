@@ -6,6 +6,26 @@ import { COUNTRIES } from '../constants/countries';
 // ─── Local dev dummy data ─────────────────────────────────────────────────────
 const IS_DEV = import.meta.env.DEV;
 
+export interface ChurchEnrichment {
+  pastor: string | null;
+  email: string | null;
+  facebook: string | null;
+  instagram: string | null;
+  youtube: string | null;
+  description: string;
+  /** True when the org publicly presents the displayed number as a WhatsApp contact. */
+  phoneIsWhatsApp?: boolean;
+  /** Only present when the org had no phone and its published WhatsApp number filled the gap. */
+  phone?: string | null;
+  phoneCountryCode?: string | null;
+}
+
+export interface EnrichmentResult {
+  enrichments: Record<string, ChurchEnrichment>;
+  /** Ids the server could not enrich (chunk failed or hit its time budget) — safe to retry. */
+  skipped: string[];
+}
+
 const DUMMY_CHURCHES: Church[] = [
   {
     id: 'dummy-1',
@@ -17,6 +37,8 @@ const DUMMY_CHURCHES: Church[] = [
     country: 'US',
     website: 'https://gracenashville.org',
     phone: '(615) 555-0101',
+    phoneCountryCode: '+1',
+    phoneIsWhatsApp: true,
     email: 'info@gracenashville.org',
     pastor: 'Pastor John Williams',
     founded: '1984',
@@ -41,6 +63,8 @@ const DUMMY_CHURCHES: Church[] = [
     country: 'US',
     website: 'https://cornerstonefranklin.com',
     phone: '(615) 555-0202',
+    phoneCountryCode: '+1',
+    phoneIsWhatsApp: false,
     email: 'office@cornerstonefranklin.com',
     pastor: 'Rev. Sarah Mitchell',
     founded: '1972',
@@ -65,6 +89,8 @@ const DUMMY_CHURCHES: Church[] = [
     country: 'US',
     website: 'https://harvestfellowship.org',
     phone: '(615) 555-0303',
+    phoneCountryCode: '+1',
+    phoneIsWhatsApp: true,
     email: 'connect@harvestfellowship.org',
     pastor: 'Dr. Marcus Green',
     founded: '2001',
@@ -89,6 +115,8 @@ const DUMMY_CHURCHES: Church[] = [
     country: 'US',
     website: 'https://standrewspca.org',
     phone: '(615) 555-0404',
+    phoneCountryCode: '+1',
+    phoneIsWhatsApp: false,
     email: null,
     pastor: 'Pastor David Kim',
     founded: '1953',
@@ -113,6 +141,8 @@ const DUMMY_CHURCHES: Church[] = [
     country: 'US',
     website: 'https://newlifesmyrna.com',
     phone: '(615) 555-0505',
+    phoneCountryCode: '+1',
+    phoneIsWhatsApp: false,
     email: 'info@newlifesmyrna.com',
     pastor: 'Bishop Tanya Brooks',
     founded: '1991',
@@ -283,6 +313,7 @@ export class ChurchService {
         country: countryCode,
         countryName,
         location: this.sanitizeInput(params.location || ''),
+        keywords: this.sanitizeInput(params.keywords || ''),
         radius: params.radius,
         includeChurches: params.includeChurches,
         includeMinistries: params.includeMinistries,
@@ -319,10 +350,8 @@ export class ChurchService {
     return summaries || {};
   }
 
-  async enrichChurchesFromPlaces(
-    churches: Church[]
-  ): Promise<Record<string, { pastor: string | null; email: string | null; facebook: string | null; instagram: string | null; youtube: string | null; description: string }>> {
-    if (IS_DEV) return {};
+  async enrichChurchesFromPlaces(churches: Church[]): Promise<EnrichmentResult> {
+    if (IS_DEV) return { enrichments: {}, skipped: [] };
     const response = await this.authedFetch('/api/enrich-churches-from-places', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -334,8 +363,8 @@ export class ChurchService {
       throw new Error(err.error || err.message || `HTTP ${response.status}`);
     }
 
-    const { enrichments } = await response.json();
-    return enrichments || {};
+    const { enrichments, skipped } = await response.json();
+    return { enrichments: enrichments || {}, skipped: Array.isArray(skipped) ? skipped : [] };
   }
 
   async summarizeBatch(

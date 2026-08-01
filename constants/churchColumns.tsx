@@ -2,6 +2,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Church, OutreachStatus } from '../types';
 import { COUNTRIES } from './countries';
+import { toE164Digits, dialCodeFor, stripTrunkPrefix } from '../lib/phone.js';
 
 /**
  * ─── SINGLE SOURCE OF TRUTH FOR TABLE COLUMNS ──────────────────────────────────
@@ -29,7 +30,7 @@ export const CHURCH_COLUMNS: ColumnDef[] = [
   { key: 'state',       label: 'State / Province',     width: 130 },
   { key: 'country',     label: 'Country',              width: 120 },
   { key: 'pastor',      label: 'Pastor / Leader',      width: 170 },
-  { key: 'phone',       label: 'Phone',                width: 150 },
+  { key: 'phone',       label: 'Phone',                width: 220 },
   { key: 'email',       label: 'Email',                width: 200 },
   { key: 'website',     label: 'Website',              width: 200 },
   { key: 'socials',     label: 'Socials',              width: 110 },
@@ -155,6 +156,12 @@ const EnrichingTag: React.FC = () => (
     </svg>
     enriching…
   </span>
+);
+
+const WhatsAppIcon: React.FC = () => (
+  <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+    <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.076 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421-7.403h-.004a9.87 9.87 0 00-4.951 1.263 9.87 9.87 0 00-3.197 2.663A9.87 9.87 0 001.05 12.011c0 5.445 4.557 9.854 10.154 9.854a10.11 10.11 0 007.157-2.863 9.87 9.87 0 002.863-7.157c0-5.453-4.557-9.854-10.154-9.854z" />
+  </svg>
 );
 
 // ─── Inline-editable cell (database mode) ─────────────────────────────────────
@@ -318,28 +325,49 @@ function renderCell(col: ColumnDef, church: Church, ctx: ChurchRowContext): Reac
       if (!church.pastor && ctx.enriching) return <EnrichingTag />;
       return <span className="text-sm text-slate-700 truncate block max-w-full">{church.pastor || '—'}</span>;
 
-    case 'phone':
-      return church.phone ? (
-        <div className="flex items-center gap-2">
+    case 'phone': {
+      if (!church.phone) {
+        return ctx.enriching ? <EnrichingTag /> : <span className="text-sm text-slate-400">—</span>;
+      }
+      // Rows saved before country codes were captured fall back to their country's code.
+      const countryCode = church.phoneCountryCode || dialCodeFor(church.country);
+      const e164 = toE164Digits(countryCode, church.phone);
+      const isWhatsApp = !!church.phoneIsWhatsApp;
+      return (
+        <div className="flex items-center gap-1.5 min-w-0">
           <a
-            href={church.phoneIsWhatsApp ? `https://wa.me/${church.phone.replace(/\D/g, '')}` : `tel:${church.phone}`}
+            href={e164 ? `tel:+${e164}` : `tel:${church.phone}`}
             onClick={stop}
-            target={church.phoneIsWhatsApp ? '_blank' : undefined}
-            rel={church.phoneIsWhatsApp ? 'noopener noreferrer' : undefined}
-            className="text-sm text-slate-700 hover:text-green-700"
+            className="text-sm text-slate-700 hover:text-green-700 whitespace-nowrap"
           >
-            {church.phoneCountryCode && <span className="font-semibold">{church.phoneCountryCode} </span>}
-            {church.phone}
+            {countryCode && <span className="font-semibold">{countryCode} </span>}
+            {countryCode ? stripTrunkPrefix(countryCode, church.phone) : church.phone}
           </a>
-          {church.phoneIsWhatsApp && (
-            <svg className="w-4 h-4 text-green-600" fill="currentColor" viewBox="0 0 24 24" title="WhatsApp">
-              <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.076 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421-7.403h-.004a9.87 9.87 0 00-4.951 1.263 9.87 9.87 0 00-3.197 2.663A9.87 9.87 0 001.05 12.011c0 5.445 4.557 9.854 10.154 9.854a10.11 10.11 0 007.157-2.863 9.87 9.87 0 002.863-7.157c0-5.453-4.557-9.854-10.154-9.854z"/>
-            </svg>
+          {isWhatsApp ? (
+            <a
+              href={`https://wa.me/${e164}`}
+              onClick={stop}
+              target="_blank"
+              rel="noopener noreferrer"
+              title="Listed as a WhatsApp number — open chat"
+              className="inline-flex items-center gap-1 shrink-0 rounded-full bg-green-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-green-700 ring-1 ring-green-200 hover:bg-green-100"
+            >
+              <WhatsAppIcon />
+              WhatsApp
+            </a>
+          ) : ctx.enriching ? (
+            <span className="text-[10px] text-slate-400 shrink-0">checking…</span>
+          ) : (
+            <span
+              title="No publicly listed WhatsApp contact found for this number"
+              className="shrink-0 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-slate-400"
+            >
+              No WA
+            </span>
           )}
         </div>
-      ) : (
-        <span className="text-sm text-slate-400">—</span>
       );
+    }
 
     case 'email':
       if (church.email) return (

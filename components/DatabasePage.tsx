@@ -3,6 +3,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Church, ChurchResearch, OutreachStatus } from '../types';
 import { churchService } from '../services/churchService';
 import { COUNTRIES } from '../constants/countries';
+import { formatPhone, dialCodeFor } from '../lib/phone.js';
 import ChurchResearchPanel from './ChurchResearchPanel';
 import {
   CHURCH_COLUMNS,
@@ -191,11 +192,14 @@ const DatabasePage: React.FC<Props> = ({ onBack }) => {
 
   function exportCsv() {
     const esc = (v: any) => v == null ? '""' : `"${String(v).replace(/"/g, '""')}"`;
-    const headers = ['Name','Org Type','City','Country','Address','Pastor / Director','Phone','Website','Outreach Status','Saved At'];
+    const headers = ['Name','Org Type','City','Country','Address','Pastor / Director','Phone','WhatsApp','Website','Outreach Status','Saved At'];
     const rows = filtered.map(c => [
       esc(c.name), esc(c.organizationType), esc(c.city),
       esc(COUNTRIES.find(x => x.code === (c.country || '').toUpperCase())?.name || c.country),
-      esc(c.address), esc(c.pastor), esc(c.phone), esc(c.website),
+      // Export the full international form so the number is dialable out of context.
+      esc(c.address), esc(c.pastor),
+      esc(formatPhone(c.phoneCountryCode || dialCodeFor(c.country), c.phone)),
+      esc(c.phone ? (c.phoneIsWhatsApp ? 'Yes' : 'No') : ''), esc(c.website),
       esc(STATUS_CONFIG[c.outreachStatus || 'not_contacted']?.label),
       esc(c.savedAt ? new Date(c.savedAt).toLocaleDateString() : '')
     ].join(','));
@@ -212,7 +216,10 @@ const DatabasePage: React.FC<Props> = ({ onBack }) => {
   }
 
   return (
-    <div className="flex flex-col h-full bg-white">
+    // flex-1 + min-h-0 (not h-full): this sits under a fixed-height nav bar inside a
+    // flex column, so height:100% overflowed the viewport by the nav's height and
+    // pushed the table's horizontal scrollbar off-screen.
+    <div className="flex flex-col flex-1 min-h-0 bg-white">
       {/* Header */}
       <header className="h-16 border-b border-slate-300 flex items-center justify-between px-6 shrink-0 bg-slate-100/80 backdrop-blur-md">
         <div className="flex items-center gap-6">

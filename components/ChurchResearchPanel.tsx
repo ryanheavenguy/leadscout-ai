@@ -1,6 +1,7 @@
 
 import React from 'react';
 import { Church, ChurchResearch } from '../types';
+import { formatPhone, dialCodeFor } from '../lib/phone.js';
 
 interface Props {
   church: Church | null;
@@ -56,9 +57,14 @@ const ChurchResearchPanel: React.FC<Props> = ({ church, research, loading, onIns
           )}
           {church.phone && (
             <div>
-              <div className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-0.5">Phone</div>
-              <a href={`tel:${church.phone}`} className="text-sm font-bold text-white hover:text-blue-300">
-                {church.phone}
+              <div className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-0.5">
+                Phone{church.phoneIsWhatsApp && <span className="ml-1 text-green-400">· WhatsApp</span>}
+              </div>
+              <a
+                href={`tel:${formatPhone(church.phoneCountryCode || dialCodeFor(church.country), church.phone)}`}
+                className="text-sm font-bold text-white hover:text-blue-300"
+              >
+                {formatPhone(church.phoneCountryCode || dialCodeFor(church.country), church.phone)}
               </a>
             </div>
           )}
