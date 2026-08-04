@@ -12,6 +12,7 @@ import { GoogleGenAI, Type } from '@google/genai';
 import { createClient } from '@supabase/supabase-js';
 import { normalizePhone, formatPhone, sameNumber, toE164Digits } from './lib/phone.js';
 import { scrapeSite } from './lib/scrape.js';
+import { splitByColumn } from './lib/schema.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -227,6 +228,15 @@ function cleanUrl(value, requiredHost) {
   return url.toString();
 }
 
+// A discovered website only needs to be a plausible http(s) URL — unlike a social
+// profile, a bare domain IS the useful part, so cleanUrl's path/host requirements don't apply.
+function cleanWebsiteUrl(value) {
+  const s = cleanField(value, 300);
+  if (!s) return null;
+  const withScheme = /^https?:\/\//i.test(s) ? s : `https://${s.replace(/^\/+/, '')}`;
+  try { return new URL(withScheme).toString(); } catch { return null; }
+}
+
 const EMAIL_RE = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i;
 function cleanEmail(value) {
   const s = cleanField(value, 254);
@@ -289,16 +299,24 @@ app.post('/api/db/churches', async (req, res) => {
   }
 
   const userId = req.user.sub;
-  const rows = churches
-    .filter(c => c && typeof c.name === 'string')
-    .map(c => ({
+  const unsupportedFields = new Set();
+  const rows = [];
+  for (const c of churches) {
+    if (!c || typeof c.name !== 'string') continue;
+    const { writable, unsupported } = await splitByColumn({
       ...pickAllowed(c),
       userId,
       name: c.name.trim(),
       city: (c.city || '').trim(),
       savedAt: new Date().toISOString(),
       outreachStatus: 'not_contacted'
-    }));
+    });
+    unsupported.forEach(f => unsupportedFields.add(f));
+    rows.push(writable);
+  }
+  if (unsupportedFields.size > 0) {
+    console.warn('[/api/db/churches] table has no column for:', [...unsupportedFields].join(', '));
+  }
 
   // Get existing churches for this user to check for duplicates
   const { data: existing, error: existingError } = await supabaseAdmin
@@ -321,13 +339,23 @@ app.post('/api/db/churches', async (req, res) => {
     data = result.data;
     error = result.error;
   }
-  if (error) return res.status(500).json({ error: 'Failed to save churches.' });
+  if (error) {
+    // The message is what makes a failed save diagnosable — a bare "Failed to save"
+    // hides schema and constraint errors behind a generic banner.
+    console.error('[/api/db/churches] insert failed:', error.code, error.message, error.details || '');
+    return res.status(500).json({ error: `Failed to save churches: ${error.message}` });
+  }
 
   const { count } = await supabaseAdmin
     .from('churches')
     .select('*', { count: 'exact', head: true })
     .eq('userId', userId);
-  res.json({ ok: true, added: (data || []).length, total: count || 0 });
+  res.json({
+    ok: true,
+    added: (data || []).length,
+    total: count || 0,
+    unsupportedFields: [...unsupportedFields]
+  });
 });
 
 // ─── PATCH /api/db/churches/:id ───────────────────────────────────────────────
@@ -364,13 +392,21 @@ app.patch('/api/db/churches/:id', async (req, res) => {
     return res.status(400).json({ error: 'Name cannot be empty.' });
   }
 
+  const { writable, unsupported } = await splitByColumn(updates);
+  if (Object.keys(writable).length === 0) {
+    return res.status(400).json({ error: `Not stored — the table has no column for: ${unsupported.join(', ')}.` });
+  }
+
   const { data, error } = await supabaseAdmin
     .from('churches')
-    .update(updates)
+    .update(writable)
     .eq('id', id)
     .eq('userId', userId)
     .select();
-  if (error) return res.status(500).json({ error: 'Failed to update church.' });
+  if (error) {
+    console.error('[/api/db/churches/:id] update failed:', error.code, error.message);
+    return res.status(500).json({ error: `Failed to update church: ${error.message}` });
+  }
   if (!data || data.length === 0) return res.status(404).json({ error: 'Church not found.' });
   res.json({ ok: true });
 });
@@ -404,11 +440,12 @@ app.post('/api/db/churches/bulk-update', async (req, res) => {
     if (typeof entry.phoneIsWhatsApp === 'boolean') patch.phoneIsWhatsApp = entry.phoneIsWhatsApp;
     if (typeof entry.phoneCountryCode === 'string') patch.phoneCountryCode = entry.phoneCountryCode.slice(0, 8);
 
-    if (Object.keys(patch).length === 0) continue;
+    const { writable } = await splitByColumn(patch);
+    if (Object.keys(writable).length === 0) continue;
 
     const { data, error } = await supabaseAdmin
       .from('churches')
-      .update(patch)
+      .update(writable)
       .eq('id', entry.id)
       .eq('userId', userId)
       .select('id');
@@ -936,6 +973,9 @@ const GROUNDED_CONCURRENCY = 4;
 // enough headroom to serialize what it already has instead of getting killed mid-flight.
 const ENRICH_DEADLINE_MS = Number(process.env.ENRICH_DEADLINE_MS || 50000);
 const SCRAPE_DEADLINE_MS = Number(process.env.SCRAPE_DEADLINE_MS || 22000);
+// Runs before stage 1 and must not eat into its budget — most churches already have a
+// website and never touch stage 0 at all, so that's where the time is best spent.
+const DISCOVERY_DEADLINE_MS = Number(process.env.DISCOVERY_DEADLINE_MS || 10000);
 
 function chunkList(items, size) {
   const out = [];
@@ -958,6 +998,31 @@ async function runPool(items, limit, fn) {
     }
   };
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+}
+
+// ─── Stage 0: find a website when Places didn't link one ─────────────────────
+// A discovered website is what makes everything downstream trustworthy: it unlocks
+// the deterministic scrape (stage 1), which is what lets an email be verified against
+// real page text instead of taken on the model's word.
+function buildWebsiteDiscoveryPrompt(chunk) {
+  const churchList = chunk.map((c, i) => {
+    const name = sanitize(c.name || '');
+    const address = c.address ? sanitize(c.address) : '';
+    return `${i + 1}. "${name}"${address ? `, ${address}` : ''}`;
+  }).join('\n');
+
+  return `Use Google Search to find the official website for each organization below.
+
+Organizations:
+${churchList}
+
+For each one, return its official website URL — the organization's own domain, not a directory listing, review site, or social media page. If you cannot confidently identify it, use null. NEVER guess a plausible-looking domain.
+
+Return an object for EVERY organization, including ones you found nothing for — use null rather than omitting it. Keep the objects in the same order as the list.
+
+Each object must use exactly these keys: index, name, website — where "index" is the number from the list above and "name" is the organization name as listed, so the results can be matched back.
+
+Return ONLY a raw JSON array — no markdown, no code fences, no prose.`;
 }
 
 // Scraped pages are untrusted input heading into a prompt. Neutralize the delimiters
@@ -988,20 +1053,21 @@ ${churchList}
 For each one, find:
 1. pastor — the lead/senior pastor or primary leader's full name, if publicly listed.
 2. email — the primary public contact email address (e.g. info@, office@, or a listed staff email), if publicly listed.
-3. facebook — the official Facebook page URL.
-4. instagram — the official Instagram profile URL.
-5. youtube — the official YouTube channel URL.
-6. description — a concise 2-sentence description of its identity, tradition, and community role.
-7. whatsapp — a phone number that the organization PUBLICLY PRESENTS AS A WHATSAPP CONTACT, in international format (e.g. "+234 803 123 4567").
+3. phone — a publicly listed contact phone number, in international format (e.g. "+234 803 123 4567"), if the organization doesn't already have one listed above.
+4. facebook — the official Facebook page URL.
+5. instagram — the official Instagram profile URL.
+6. youtube — the official YouTube channel URL.
+7. description — a concise 2-sentence description of its identity, tradition, and community role.
+8. whatsapp — a phone number that the organization PUBLICLY PRESENTS AS A WHATSAPP CONTACT, in international format (e.g. "+234 803 123 4567").
 
 Rules:
-- Use null for any field you cannot verify. NEVER invent or guess names, emails, or URLs.
+- Use null for any field you cannot verify. NEVER invent or guess names, emails, phone numbers, or URLs.
 - Only return an email or social URL that clearly belongs to this specific organization.
 - For whatsapp, return a number ONLY when the source explicitly ties it to WhatsApp — a "Chat on WhatsApp" / "WhatsApp us" link (wa.me, api.whatsapp.com, chat.whatsapp.com), a number labelled "WhatsApp" on the site or social profile, or a WhatsApp click-to-chat button. Do NOT assume a number is on WhatsApp because it is a mobile number or because the country commonly uses WhatsApp. If no number is explicitly presented as WhatsApp, return null.
 - Return an object for EVERY organization, including ones you found nothing for — use nulls rather than omitting it.
 - Keep the objects in the same order as the list.
 
-Each object must use exactly these keys: index, name, pastor, email, facebook, instagram, youtube, description, whatsapp — where "index" is the number from the list above and "name" is the organization name as listed, so the results can be matched back.
+Each object must use exactly these keys: index, name, pastor, email, phone, facebook, instagram, youtube, description, whatsapp — where "index" is the number from the list above and "name" is the organization name as listed, so the results can be matched back.
 
 Return ONLY a raw JSON array — no markdown, no code fences, no prose.`;
 }
@@ -1106,32 +1172,40 @@ const FREE_MAIL_HOSTS = /^(gmail|googlemail|yahoo|ymail|hotmail|outlook|live|msn
 
 // The grounded pass has no source text to check against, so its email is verified
 // structurally instead: it must sit on the org's own domain or a consumer mail host.
-// Anything else is a different organization's address bleeding across the chunk.
-function plausibleGroundedEmail(church, value) {
+// Anything else is a different organization's address bleeding across the chunk — and
+// with no website at all to compare against, there is nothing to verify a non-freemail
+// domain against, so it is rejected rather than accepted on faith.
+function plausibleGroundedEmail(effectiveWebsite, value) {
   const email = cleanEmail(value);
   if (!email) return null;
   const domain = email.split('@')[1] || '';
   if (FREE_MAIL_HOSTS.test(domain)) return email;
+  if (!effectiveWebsite) return null;
 
   let siteHost;
-  try { siteHost = new URL(/^https?:\/\//i.test(church.website || '') ? church.website : `https://${church.website}`).hostname; }
-  catch { return email; } // no website to compare against — nothing to contradict it
+  try { siteHost = new URL(/^https?:\/\//i.test(effectiveWebsite) ? effectiveWebsite : `https://${effectiveWebsite}`).hostname; }
+  catch { return null; }
   const strip = (h) => h.toLowerCase().replace(/^www\./, '');
   return strip(domain) === strip(siteHost) || strip(siteHost).endsWith(strip(domain)) ? email : null;
 }
 
-function composeEnrichment(church, { site, page, grounded }) {
+// effectiveWebsite is church.website, or a website stage 0 found for it — passed in
+// separately because the church record itself is never mutated mid-request.
+function composeEnrichment(church, { site, page, grounded, effectiveWebsite }) {
   const email = firstOf(
     cleanEmail(site?.email),
     cleanEmail(page?.email),
-    plausibleGroundedEmail(church, grounded?.email)
+    plausibleGroundedEmail(effectiveWebsite, grounded?.email)
   );
 
-  // Places gave us the phone for most rows; fill the rest from the site itself.
+  // Places gave us the phone for most rows, and the site scrape is the next most
+  // trustworthy. A grounded (unverified) guess is only used as a last resort — it is
+  // the lowest-confidence source, so nothing outranks it and it never overwrites a
+  // number we already have.
   let phone = church.phone || null;
   let phoneCountryCode = church.phoneCountryCode || null;
   if (!phone) {
-    const raw = firstOf(cleanField(site?.phone, 40), cleanField(page?.phone, 40));
+    const raw = firstOf(cleanField(site?.phone, 40), cleanField(page?.phone, 40), cleanField(grounded?.phone, 40));
     if (raw) {
       const parsed = normalizePhone({ international: raw, national: raw, regionCode: church.country });
       if (parsed.phone) ({ phone, phoneCountryCode } = parsed);
@@ -1160,6 +1234,9 @@ function composeEnrichment(church, { site, page, grounded }) {
   }
 
   return {
+    // Only set when stage 0 found a website Places didn't have — never overwrites one
+    // the church record already carries.
+    website: effectiveWebsite && effectiveWebsite !== church.website ? effectiveWebsite : null,
     pastor: firstOf(cleanField(page?.pastor, 120), cleanField(grounded?.pastor, 120)),
     email,
     facebook: firstOf(cleanUrl(site?.facebook, 'facebook.com'), cleanUrl(grounded?.facebook, 'facebook.com')),
@@ -1217,11 +1294,45 @@ app.post('/api/enrich-churches-from-places', async (req, res) => {
     const startedAt = Date.now();
     const elapsed = () => Date.now() - startedAt;
 
+    // ── Stage 0: find a website for orgs Places didn't link one to ───────────
+    // Runs first because everything downstream is more trustworthy once a website is
+    // in hand — it's what turns stage 3's email guess into a stage 1 scrape that can
+    // actually be verified against real page text.
+    const discoveredWebsites = new Map();
+    await runPool(chunkList(churches.filter(c => !c.website), GROUNDED_CHUNK_SIZE), GROUNDED_CONCURRENCY, async (group) => {
+      if (elapsed() > DISCOVERY_DEADLINE_MS) return;
+      try {
+        const items = await callWithRetry(async () => {
+          const response = await ai.models.generateContent({
+            model: MODEL_NAME,
+            contents: buildWebsiteDiscoveryPrompt(group),
+            config: { tools: [{ googleSearch: {} }] }
+          });
+          const parsed = extractJsonObjects(response.text);
+          if (!parsed.length) {
+            throw Object.assign(new Error('Website discovery response contained no usable JSON.'), { retryable: true });
+          }
+          return parsed;
+        }, 2);
+
+        const aligned = alignEnrichments(group, items);
+        group.forEach((c, i) => {
+          const url = cleanWebsiteUrl(aligned.get(i)?.website);
+          if (url) discoveredWebsites.set(c.id, url);
+        });
+      } catch (err) {
+        // One bad chunk just means those orgs get no website — stage 3 still gets a
+        // shot at their pastor/phone below.
+        console.warn('[/api/enrich-churches-from-places] website discovery chunk failed:', err.message);
+      }
+    });
+    const effectiveWebsite = (c) => c.website || discoveredWebsites.get(c.id) || '';
+
     // ── Stage 1: read each organization's own website ────────────────────────
     const sites = new Map();
-    await runPool(churches.filter(c => c.website), SCRAPE_CONCURRENCY, async (c) => {
+    await runPool(churches.filter(c => effectiveWebsite(c)), SCRAPE_CONCURRENCY, async (c) => {
       if (elapsed() > SCRAPE_DEADLINE_MS) return;
-      const site = await scrapeSite(c.website);
+      const site = await scrapeSite(effectiveWebsite(c));
       if (site) sites.set(c.id, site);
     });
 
@@ -1230,7 +1341,7 @@ app.post('/api/enrich-churches-from-places', async (req, res) => {
     const withText = churches.filter(c => (sites.get(c.id)?.text || '').length > 200);
     await runPool(chunkList(withText, PAGE_CHUNK_SIZE), PAGE_CONCURRENCY, async (group) => {
       if (elapsed() > ENRICH_DEADLINE_MS - 8000) return;
-      const items = await extractFromPages(group.map(c => ({ church: c, site: sites.get(c.id) })));
+      const items = await extractFromPages(group.map(c => ({ church: { ...c, website: effectiveWebsite(c) }, site: sites.get(c.id) })));
       const aligned = alignEnrichments(group, items);
       group.forEach((c, i) => {
         const item = aligned.get(i);
@@ -1239,14 +1350,19 @@ app.post('/api/enrich-churches-from-places', async (req, res) => {
     });
 
     // ── Stage 3: grounded search, only for what is still missing ─────────────
+    // Runs for every remaining church, website or not — but composeEnrichment only
+    // accepts its email when effectiveWebsite lets plausibleGroundedEmail verify the
+    // domain. Pastor and phone have no such gate: they're the lowest-stakes fields, so
+    // an unverified-but-plausible guess is an acceptable last resort for them.
     const stillMissing = (c) => {
       const site = sites.get(c.id);
       const page = pageResults.get(c.id);
       const hasEmail = cleanEmail(site?.email) || cleanEmail(page?.email);
       const hasPastor = cleanField(page?.pastor, 120);
+      const hasPhone = c.phone || cleanField(site?.phone, 40) || cleanField(page?.phone, 40);
       const hasDescription = cleanField(page?.description, 1000);
       const hasSocial = site?.facebook || site?.instagram || site?.youtube;
-      return !(hasEmail && hasPastor && hasDescription && hasSocial);
+      return !(hasEmail && hasPastor && hasPhone && hasDescription && hasSocial);
     };
 
     const groundedResults = new Map();
@@ -1301,7 +1417,8 @@ app.post('/api/enrich-churches-from-places', async (req, res) => {
       enrichments[c.id] = composeEnrichment(c, {
         site: sites.get(c.id),
         page: pageResults.get(c.id),
-        grounded: groundedResults.get(c.id)
+        grounded: groundedResults.get(c.id),
+        effectiveWebsite: effectiveWebsite(c)
       });
     }
 

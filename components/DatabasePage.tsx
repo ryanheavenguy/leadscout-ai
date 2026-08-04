@@ -209,6 +209,7 @@ const DatabasePage: React.FC<Props> = ({ onBack }) => {
             if (!value || church[key]) return;
             (patch as any)[key] = value;
           };
+          fill('website', e.website);
           fill('pastor', e.pastor);
           fill('email', e.email);
           fill('facebook', e.facebook);

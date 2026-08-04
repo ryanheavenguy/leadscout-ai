@@ -7,6 +7,8 @@ import { COUNTRIES } from '../constants/countries';
 const IS_DEV = import.meta.env.DEV;
 
 export interface ChurchEnrichment {
+  /** Only present when Places had no website on file and the server found one. */
+  website?: string | null;
   pastor: string | null;
   email: string | null;
   facebook: string | null;
@@ -236,7 +238,7 @@ export class ChurchService {
     return response.json();
   }
 
-  async saveChurches(churches: Church[]): Promise<{ added: number; total: number }> {
+  async saveChurches(churches: Church[]): Promise<{ added: number; total: number; unsupportedFields?: string[] }> {
     if (IS_DEV) {
       const before = devChurches.length;
       const toAdd = churches.filter(c => !devChurches.some(d => d.name === c.name && d.city === c.city));
@@ -248,7 +250,12 @@ export class ChurchService {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ churches })
     });
-    if (!response.ok) throw new Error('Failed to save churches.');
+    if (!response.ok) {
+      // Carry the server's reason through — a bare "Save failed." left schema and
+      // rate-limit errors indistinguishable from each other.
+      const err = await response.json().catch(() => ({ error: response.statusText }));
+      throw new Error(err.error || `HTTP ${response.status}`);
+    }
     return response.json();
   }
 

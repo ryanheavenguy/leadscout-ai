@@ -189,6 +189,7 @@ const App: React.FC = () => {
                   if (!e) return c;
                   return {
                     ...c,
+                    website: e.website ?? c.website ?? null,
                     pastor: e.pastor ?? c.pastor ?? null,
                     email: e.email ?? c.email ?? null,
                     facebook: e.facebook ?? c.facebook ?? null,
@@ -265,10 +266,16 @@ const App: React.FC = () => {
 
     setSaveStatus('saving');
     try {
-      const { added, total } = await churchService.saveChurches(toSave);
-      setSaveStatus(added > 0 ? `Saved ${added} new (${total} total in DB)` : `All already in DB (${total} total)`);
-    } catch {
-      setSaveStatus('Save failed.');
+      const { added, total, unsupportedFields } = await churchService.saveChurches(toSave);
+      const saved = added > 0 ? `Saved ${added} new (${total} total in DB)` : `All already in DB (${total} total)`;
+      // The rows went in, but some fields had nowhere to go — say so rather than
+      // reporting a clean save over data that was silently dropped.
+      setSaveStatus(unsupportedFields?.length
+        ? `${saved} — not stored: ${unsupportedFields.join(', ')} (missing DB columns)`
+        : saved);
+    } catch (err: any) {
+      console.error('Save failed', err);
+      setSaveStatus(`Save failed: ${err.message || 'unknown error'}`);
     }
   };
 
